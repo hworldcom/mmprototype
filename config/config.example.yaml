@@ -1,0 +1,43 @@
+symbol: "BTCUSDT"
+
+# --- microstructure ---
+tick_size: 0.1
+qty_step: 0.001
+min_qty: 0.001
+min_notional: 5.0
+
+maker_fee: -0.0001     # negative: rebate; adjust to your venue
+taker_fee: 0.0004
+
+# --- core model ---
+gamma: 0.01
+horizon_seconds: 60        # T: effective risk horizon
+sigma_window_seconds: 60   # rolling window for volatility estimate
+
+# initial guesses for arrival curve (tune / calibrate)
+A: 5.0
+k: 1.5
+
+# --- quoting ---
+base_order_notional: 50.0      # target notional per quote
+min_spread_ticks: 1            # don't quote inside this
+max_quote_lifetime_ms: 1000    # re-quote frequently
+inventory_skew_factor: 1.0     # multiply theoretical skew if needed
+
+# --- inventory & exposure ---
+max_inventory: 0.02            # in BTC, abs cap
+soft_inventory: 0.01           # start skewing harder past this
+max_notional_abs: 2000.0       # hard notional cap
+
+# --- risk limits ---
+max_daily_loss: 200.0          # in quote currency (e.g. USDT)
+max_drawdown: 150.0
+stale_market_timeout_ms: 3000
+
+# --- misc ---
+log_level: "INFO"
+simulation:
+  enabled: true
+  midprice_start: 30000.0
+  midprice_sigma: 30.0    # sim-only
+  update_interval_ms: 100

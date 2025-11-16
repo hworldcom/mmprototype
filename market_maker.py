@@ -21,6 +21,7 @@ class AvellanedaStoikovMM:
         X0=0.0,            # initial cash
         q_max=10           # hard inventory cap (for realism)
     ):
+        
         self.S0 = S0
         self.sigma = sigma
         self.gamma = gamma
