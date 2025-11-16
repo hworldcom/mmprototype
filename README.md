@@ -17,7 +17,8 @@ avellaneda_mm/
    ├─ __init__.py
    ├─ avellaneda_stoikov.py
    ├─ strategy.py
-   ├─ exchange.py
+   ├─ exchange.py              # base + simulated exchange
+   ├─ binance_exchange.py      # binance-specific connector (optional)
    ├─ risk.py
    ├─ utils.py
    ├─ logging_config.py
