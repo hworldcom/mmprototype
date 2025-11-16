@@ -1,3 +1,4 @@
+# mm/runner.py (snippet)
 import time
 import yaml
 import logging
@@ -6,6 +7,9 @@ from .logging_config import setup_logging
 from .exchange import SimulatedExchange
 from .strategy import StrategyConfig, AvellanedaStoikovStrategy
 from .utils import now_ms
+# binance exchange
+from .exchange import SimulatedExchange
+from .binance_exchange import BinanceExchange, BinanceCredentials
 
 
 def load_config(path: str) -> dict:
