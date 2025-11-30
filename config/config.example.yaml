@@ -1,22 +1,16 @@
 symbol: "BTCUSDT"
 
-mode: "simulation"   # "simulation" or "binance"
-
-# --- microstructure ---
 tick_size: 0.1
 qty_step: 0.001
 min_qty: 0.001
 min_notional: 5.0
 
-maker_fee: -0.0001     # negative: rebate; adjust to your venue
+maker_fee: 0.0
 taker_fee: 0.0004
 
-# --- core model ---
 gamma: 0.01
-horizon_seconds: 60        # T: effective risk horizon
-sigma_window_seconds: 60   # rolling window for volatility estimate
-
-# initial guesses for arrival curve (tune / calibrate)
+horizon_seconds: 60
+sigma_window_seconds: 60
 A: 5.0
 k: 1.5
 
@@ -36,19 +30,14 @@ max_daily_loss: 200.0          # in quote currency (e.g. USDT)
 max_drawdown: 150.0
 stale_market_timeout_ms: 3000
 
-# --- logging ---
 log_level: "INFO"
 
-# --- simulation-only settings ---
-simulation:
-  enabled: true
-  midprice_start: 30000.0
-  midprice_sigma: 30.0
-  update_interval_ms: 100
-
-# --- binance connector settings ---
 binance:
-  api_key: ""       # leave empty to use environment variables
-  api_secret: ""    # BINANCE_API_KEY / BINANCE_API_SECRET
-  testnet: true     # set false for mainnet (be careful!)
+  api_key: ""        # or use env BINANCE_API_KEY
+  api_secret: ""
+  testnet: true
   recv_window: 5000
+
+dry_run: true                 # <- start with true
+test_duration_seconds: 60
+update_interval_ms: 1000
