@@ -5,12 +5,24 @@ import time
 import csv
 import logging
 from pathlib import Path
+from datetime import datetime, time as dtime
 
 import yaml
 from binance.client import Client
+from zoneinfo import ZoneInfo  # Python 3.9+ standard lib
 
 from .logging_config import setup_logging
 
+
+DECIMALS_PRICE = 8
+DECIMALS_QTY = 8
+
+def fmt_price(x: float) -> str:
+    # fixed decimal, no scientific notation
+    return f"{x:.{DECIMALS_PRICE}f}"
+
+def fmt_qty(x: float) -> str:
+    return f"{x:.{DECIMALS_QTY}f}"
 
 def load_config(default_path: str) -> dict:
     """
@@ -22,6 +34,21 @@ def load_config(default_path: str) -> dict:
         return yaml.safe_load(f)
 
 
+def get_berlin_now():
+    tz = ZoneInfo("Europe/Berlin")
+    return datetime.now(tz)
+
+
+def get_today_end_berlin(hour: int = 22, minute: int = 0) -> datetime:
+    """Return today's end time (e.g., 22:00) in Europe/Berlin."""
+    now = get_berlin_now()
+    end_today = now.replace(
+        hour=hour, minute=minute, second=0, microsecond=0
+    )
+    # If we've already passed today's end time, just stop immediately.
+    return end_today
+
+
 def main():
     # 1) Config & logging
     cfg_raw = load_config("config/config.binance.test.yaml")
@@ -29,50 +56,52 @@ def main():
     log = logging.getLogger("orderbook_recorder")
 
     symbol = cfg_raw["symbol"].upper()
-    duration_sec = cfg_raw.get("record_duration_seconds", 60)  # how long to record
-    interval_ms = cfg_raw.get("record_interval_ms", 200)       # how often to snapshot (ms)
 
-    bcfg = cfg_raw["binance"]
-    api_key = bcfg.get("api_key", "") or os.getenv("BINANCE_API_KEY", "")
-    api_secret = bcfg.get("api_secret", "") or os.getenv("BINANCE_API_SECRET", "")
-    testnet = bcfg.get("testnet", False) # data on testnet are different
+    # How often to snapshot (ms). Suggest 200ms to start.
+    interval_ms = cfg_raw.get("record_interval_ms", 200)
 
-    if not api_key or not api_secret:
-        log.warning("No API key/secret provided; using public endpoints only (which is fine for order book).")
+    # Hard stop at today 22:00 Berlin time
+    end_dt_berlin = get_today_end_berlin(hour=22, minute=0)
 
-    # 2) Init Binance client
-    client = Client(api_key, api_secret, testnet=testnet)
+    # Use mainnet public data for order book recording
+    client = Client(api_key=None, api_secret=None)  # mainnet, public
 
-    # 3) Prepare output file
     out_dir = Path("data")
     out_dir.mkdir(exist_ok=True)
-    outfile = out_dir / f"orderbook_depth5_{symbol}.csv"
 
-    log.info("Recording L2 depth5 for %s to %s (duration=%ds, interval=%dms, testnet=%s)",
-             symbol, outfile, duration_sec, interval_ms, testnet)
+    # One file per day & symbol, using UTC date in filename
+    utc_date_str = datetime.utcnow().strftime("%Y%m%d")
+    outfile = out_dir / f"orderbook_depth5_{symbol}_{utc_date_str}.csv"
 
-    # CSV columns: timestamp + 5 bid levels + 5 ask levels
-    # bid_i_price, bid_i_qty, ask_i_price, ask_i_qty for i=1..5
-    columns = ["timestamp"]
+    log.info(
+        "Recording L2 depth5 for %s to %s until %s (Berlin time), interval=%dms",
+        symbol,
+        outfile,
+        end_dt_berlin.isoformat(),
+        interval_ms,
+    )
+
+    columns = ["timestamp_ms"]
     for i in range(1, 6):
         columns += [f"bid{i}_price", f"bid{i}_qty", f"ask{i}_price", f"ask{i}_qty"]
 
     with outfile.open("w", newline="") as f:
-        writer = csv.writer(f)
+        writer = csv.writer(f,delimiter =';')
         writer.writerow(columns)
 
-        end_time = time.time() + duration_sec
         snap_idx = 0
 
-        while time.time() < end_time:
-            snap_idx += 1
+        while True:
+            now_berlin = get_berlin_now()
+            if now_berlin >= end_dt_berlin:
+                log.info("Reached end of recording window (%s). Stopping.", end_dt_berlin)
+                break
 
-            # Use integer milliseconds (recommended for trading data)
-            ts = int(time.time() * 1000)
+            snap_idx += 1
+            ts_ms = int(time.time() * 1000)  # UTC ms
 
             try:
                 ob = client.get_order_book(symbol=symbol, limit=5)
-                ticker = client.get_orderbook_ticker(symbol=symbol)
             except Exception as e:
                 log.exception("Error fetching order book: %s", e)
                 time.sleep(interval_ms / 1000.0)
@@ -90,23 +119,34 @@ def main():
             bids = pad_levels(bids)
             asks = pad_levels(asks)
 
-            row = [ts]
+            row = [ts_ms]
+            row = [ts_ms]  # keep timestamp as integer
+
             for i in range(5):
-                bid_price, bid_qty = float(bids[i][0]), float(bids[i][1])
-                ask_price, ask_qty = float(asks[i][0]), float(asks[i][1])
-                row += [bid_price, bid_qty, ask_price, ask_qty]
+                bid_price_f, bid_qty_f = float(bids[i][0]), float(bids[i][1])
+                ask_price_f, ask_qty_f = float(asks[i][0]), float(asks[i][1])
+
+                # convert to nicely formatted strings to avoid scientific notation
+                row += [
+                    fmt_price(bid_price_f),
+                    fmt_qty(bid_qty_f),
+                    fmt_price(ask_price_f),
+                    fmt_qty(ask_qty_f),
+                ]
 
             writer.writerow(row)
             f.flush()
 
             best_bid = float(bids[0][0])
             best_ask = float(asks[0][0])
+            mid = 0.5 * (best_bid + best_ask)
 
             log.info(
-                "[snap %d] ts=%d mid≈%.2f | best_bid=%.2f (%.4f) best_ask=%.2f (%.4f)",
+                "[snap %d] %s | ts_ms=%d mid≈%.2f | best_bid=%.2f (%.4f) best_ask=%.2f (%.4f)",
                 snap_idx,
-                ts,
-                0.5 * (best_bid + best_ask),
+                now_berlin.strftime("%Y-%m-%d %H:%M:%S"),
+                ts_ms,
+                mid,
                 best_bid,
                 float(bids[0][1]),
                 best_ask,
