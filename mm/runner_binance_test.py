@@ -1,28 +1,26 @@
 # mm/runner_binance_test.py
+import os
 import time
 import yaml
 import logging
-import os
 
 from .logging_config import setup_logging
 from .strategy import StrategyConfig, AvellanedaStoikovStrategy
+from .binance_exchange import BinanceExchange, BinanceCredentials
 from .utils import now_ms
-
-from .binance_exchange import BinanceExchange, BinanceCredentials  # when ready
 
 
 def load_config(default_path: str) -> dict:
+    """
+    Load YAML config, optionally overridden by CONFIG_PATH env var.
+    """
     path = os.getenv("CONFIG_PATH", default_path)
     with open(path, "r") as f:
         return yaml.safe_load(f)
 
-def main():
-    cfg_raw = load_config("config/config.binance.test.yaml")
-    setup_logging(cfg_raw.get("log_level", "INFO"))
-    log = logging.getLogger("runner_binance_test")
 
-    # StrategyConfig (same as sim, minus simulation section)
-    sc = StrategyConfig(
+def build_strategy_config(cfg_raw: dict) -> StrategyConfig:
+    return StrategyConfig(
         symbol=cfg_raw["symbol"],
         tick_size=cfg_raw["tick_size"],
         qty_step=cfg_raw["qty_step"],
@@ -46,6 +44,21 @@ def main():
         max_drawdown=cfg_raw["max_drawdown"],
     )
 
+
+def main():
+    # 1) Load config & logging
+    cfg_raw = load_config("config/config.binance.test.yaml")
+    setup_logging(cfg_raw.get("log_level", "INFO"))
+    log = logging.getLogger("runner_binance_test")
+
+    dry_run = bool(cfg_raw.get("dry_run", True))
+    symbol = cfg_raw["symbol"].upper()
+    test_duration_sec = cfg_raw.get("test_duration_seconds", 60)
+    update_interval_ms = cfg_raw.get("update_interval_ms", 1000)
+
+    # 2) Build strategy config and Binance credentials
+    sc = build_strategy_config(cfg_raw)
+
     bcfg = cfg_raw["binance"]
     creds = BinanceCredentials(
         api_key=bcfg.get("api_key", ""),
@@ -54,53 +67,100 @@ def main():
         recv_window=bcfg.get("recv_window", 5000),
     )
 
-    exch = BinanceExchange(creds, sc.symbol)
+    log.info("key is ")
+    log.info(bcfg.get("api_key", ""))
+
+    mode_str = "DRY-RUN (no orders)" if dry_run else "QUOTE-TEST (placing testnet orders)"
+    log.info(
+        "Starting Binance test loop for symbol=%s (testnet=%s) in %s",
+        symbol,
+        creds.testnet,
+        mode_str,
+    )
+
+    # 3) Instantiate exchange and strategy
+    try:
+        exch = BinanceExchange(creds, symbol)
+    except Exception as e:
+        log.exception("Failed to create BinanceExchange: %s", e)
+        return
+
     strat = AvellanedaStoikovStrategy(sc, exch)
 
-    log.info("Starting Binance TEST loop (no real trading at first)")
+    start_ms = now_ms()
+    end_ms = start_ms + test_duration_sec * 1000
+    iter_idx = 0
 
-    start = now_ms()
-    duration_sec = cfg_raw.get("test_duration_seconds", 60)
-    end = start + duration_sec * 1000
-    update_interval_ms = cfg_raw.get("update_interval_ms", 1000)
+    while now_ms() < end_ms:
+        iter_idx += 1
+        t_sec = (now_ms() - start_ms) / 1000.0
 
-    dry_run = cfg_raw.get("dry_run", True)
+        # 4) Get mid price from Binance
+        try:
+            mid = exch.get_mid_price()
+        except Exception as e:
+            log.exception("Error getting mid price: %s", e)
+            break
 
-    while now_ms() < end:
-        mid = exch.get_mid_price()
-        t_sec = (now_ms() - start) / 1000.0
+        log.info("[tick %d] mid=%f", iter_idx, mid)
 
+        # feed market data into strategy (for sigma estimation etc.)
         strat.on_market_data(t_sec, mid)
 
-        # For *first* tests, we don't place orders.
-        # Just compute what we *would* quote:
+        # --- DRY RUN MODE: only compute/print quotes, no orders ---
         if dry_run:
             sigma_est = strat._estimate_sigma(t_sec)
-            if sigma_est > 0:
-                # compute quotes but DON'T send
-                t_rel = 0.0
+            if sigma_est <= 0:
+                log.info("    Not enough data yet for sigma estimate.")
+            else:
+                # compute theoretical quotes without placing them
+                t_rel = 0.0  # relative horizon clock, can refine later
                 raw_bid, raw_ask, r, h = strat.model.optimal_quotes(
-                    mid, strat.state.inventory, sigma_est, t_rel
+                    mid,
+                    strat.state.inventory,
+                    sigma_est,
+                    t_rel,
                 )
                 log.info(
-                    "mid=%.2f sigma=%.4f -> theo bid=%.2f ask=%.2f (r=%.2f, h=%.4f)",
-                    mid,
+                    "    sigma=%.6f inv=%.6f -> theo: bid=%.2f ask=%.2f (r=%.2f, h=%.4f)",
                     sigma_est,
+                    strat.state.inventory,
                     raw_bid,
                     raw_ask,
                     r,
                     h,
                 )
+            # No fills to poll, no orders sent
+        # --- QUOTE TEST MODE: actually place/cancel tiny testnet orders ---
         else:
-            # Once confident, you could enable actual quoting:
-            fills = exch.poll_fills()
-            if fills:
-                strat.on_fills(fills)
-            strat.recompute_and_quote(t_sec)
+            # 1) poll fills (if any)
+            try:
+                fills = exch.poll_fills()
+                if fills:
+                    for (oid, side, price, qty) in fills:
+                        log.info(
+                            "    Fill: order_id=%s side=%s price=%.8f qty=%.8f",
+                            oid,
+                            side,
+                            price,
+                            qty,
+                        )
+                    strat.on_fills(fills)
+                else:
+                    log.info("    No new fills.")
+            except Exception as e:
+                log.warning("    Could not poll fills: %s", e)
+
+            # 2) recompute quotes and place orders via strategy
+            try:
+                strat.recompute_and_quote(t_sec)
+            except Exception as e:
+                log.exception("    Error during recompute_and_quote: %s", e)
+                break
 
         time.sleep(update_interval_ms / 1000.0)
 
-    log.info("Binance test loop finished")
+    log.info("Binance test loop finished (%s).", mode_str)
 
 
 if __name__ == "__main__":

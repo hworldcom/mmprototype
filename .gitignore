@@ -3,3 +3,4 @@
 __pycache__
 config/config.yaml
 config/config.binance.test.yaml
+.venv

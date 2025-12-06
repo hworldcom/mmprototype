@@ -55,26 +55,33 @@ class BinanceExchange(ExchangeAPI):
 
         side_binance = SIDE_BUY if side.lower() == "buy" else SIDE_SELL
 
+        # Format price/qty as Binance-friendly strings
         price_str = f"{price:.10f}".rstrip("0").rstrip(".")
         qty_str = f"{qty:.10f}".rstrip("0").rstrip(".")
 
         order = self.client.create_order(
             symbol=self.symbol,
             side=side_binance,
-            type=ORDER_TYPE_LIMIT_MAKER,  # post-only
+            type=ORDER_TYPE_LIMIT_MAKER,  # post-only spot order
             quantity=qty_str,
             price=price_str,
             recvWindow=self.recv_window,
+            # you *could* add newOrderRespType="RESULT" or "FULL" here,
+            # but we don't actually need it for now.
         )
 
         oid = str(order["orderId"])
+
+        # IMPORTANT: response does NOT contain "price"/"origQty" in ACK mode,
+        # so we trust our own arguments for local state.
         self.orders[oid] = Order(
             order_id=oid,
             side=side.lower(),
-            price=float(order["price"]),
-            qty=float(order["origQty"]),
+            price=price,
+            qty=qty,
             timestamp_ms=now_ms(),
         )
+
         return oid
 
     def cancel_order(self, order_id: str) -> None:
