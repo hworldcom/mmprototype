@@ -1,0 +1,6 @@
+symbol: "BTCUSDT"
+
+log_level: "INFO"
+
+# recorder-specific settings
+record_interval_ms: 200   # 5 Hz, adjust if you want slower/faster

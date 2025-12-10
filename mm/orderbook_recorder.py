@@ -9,7 +9,7 @@ from datetime import datetime, time as dtime
 
 import yaml
 from binance.client import Client
-from zoneinfo import ZoneInfo  # Python 3.9+ standard lib
+from zoneinfo import ZoneInfo  # Python 3.9+
 
 from .logging_config import setup_logging
 
@@ -17,88 +17,107 @@ from .logging_config import setup_logging
 DECIMALS_PRICE = 8
 DECIMALS_QTY = 8
 
+
 def fmt_price(x: float) -> str:
     # fixed decimal, no scientific notation
     return f"{x:.{DECIMALS_PRICE}f}"
 
+
 def fmt_qty(x: float) -> str:
     return f"{x:.{DECIMALS_QTY}f}"
 
+
 def load_config(default_path: str) -> dict:
-    """
-    Load YAML config, optionally overridden by CONFIG_PATH env var.
-    We reuse the same binance test config file structure.
-    """
     path = os.getenv("CONFIG_PATH", default_path)
     with open(path, "r") as f:
         return yaml.safe_load(f)
 
 
-def get_berlin_now():
-    tz = ZoneInfo("Europe/Berlin")
-    return datetime.now(tz)
+def berlin_now() -> datetime:
+    return datetime.now(ZoneInfo("Europe/Berlin"))
 
 
-def get_today_end_berlin(hour: int = 22, minute: int = 0) -> datetime:
-    """Return today's end time (e.g., 22:00) in Europe/Berlin."""
-    now = get_berlin_now()
-    end_today = now.replace(
-        hour=hour, minute=minute, second=0, microsecond=0
-    )
-    # If we've already passed today's end time, just stop immediately.
-    return end_today
+def today_window_berlin(start_h: int = 8, end_h: int = 22) -> tuple[datetime, datetime]:
+    """
+    Returns (start_dt, end_dt) for today's recording window in Europe/Berlin.
+    """
+    now = berlin_now()
+    start_dt = now.replace(hour=start_h, minute=0, second=0, microsecond=0)
+    end_dt = now.replace(hour=end_h, minute=0, second=0, microsecond=0)
+    return start_dt, end_dt
 
 
 def main():
-    # 1) Config & logging
+    # --- config & logging ---
     cfg_raw = load_config("config/config.binance.test.yaml")
     setup_logging(cfg_raw.get("log_level", "INFO"))
     log = logging.getLogger("orderbook_recorder")
 
     symbol = cfg_raw["symbol"].upper()
+    interval_ms = cfg_raw.get("record_interval_ms", 200)  # snapshot every 200ms by default
 
-    # How often to snapshot (ms). Suggest 200ms to start.
-    interval_ms = cfg_raw.get("record_interval_ms", 200)
+    start_dt, end_dt = today_window_berlin(start_h=8, end_h=22)
 
-    # Hard stop at today 22:00 Berlin time
-    end_dt_berlin = get_today_end_berlin(hour=22, minute=0)
+    now_b = berlin_now()
+    if now_b > end_dt:
+        log.info(
+            "Current time %s is past today's end window %s. Exiting.",
+            now_b.isoformat(),
+            end_dt.isoformat(),
+        )
+        return
 
-    # Use mainnet public data for order book recording
-    client = Client(api_key=None, api_secret=None)  # mainnet, public
+    if now_b < start_dt:
+        wait_sec = (start_dt - now_b).total_seconds()
+        log.info(
+            "Current time %s is before start window %s. Sleeping for %.1fs.",
+            now_b.isoformat(),
+            start_dt.isoformat(),
+            wait_sec,
+        )
+        time.sleep(max(0.0, wait_sec))
 
+    log.info(
+        "Starting order book recording for %s. Window: %s → %s (Berlin time). Interval=%dms",
+        symbol,
+        start_dt.isoformat(),
+        end_dt.isoformat(),
+        interval_ms,
+    )
+
+    # --- Binance client (mainnet, public data only) ---
+    client = Client(api_key=None, api_secret=None)  # mainnet, no auth needed for order book
+
+    # --- output file ---
     out_dir = Path("data")
     out_dir.mkdir(exist_ok=True)
 
-    # One file per day & symbol, using UTC date in filename
     utc_date_str = datetime.utcnow().strftime("%Y%m%d")
     outfile = out_dir / f"orderbook_depth5_{symbol}_{utc_date_str}.csv"
 
-    log.info(
-        "Recording L2 depth5 for %s to %s until %s (Berlin time), interval=%dms",
-        symbol,
-        outfile,
-        end_dt_berlin.isoformat(),
-        interval_ms,
-    )
+    log.info("Writing depth5 snapshots to %s", outfile)
 
     columns = ["timestamp_ms"]
     for i in range(1, 6):
         columns += [f"bid{i}_price", f"bid{i}_qty", f"ask{i}_price", f"ask{i}_qty"]
 
     with outfile.open("w", newline="") as f:
-        writer = csv.writer(f,delimiter =';')
+        writer = csv.writer(f)
         writer.writerow(columns)
 
         snap_idx = 0
 
         while True:
-            now_berlin = get_berlin_now()
-            if now_berlin >= end_dt_berlin:
-                log.info("Reached end of recording window (%s). Stopping.", end_dt_berlin)
+            now_b = berlin_now()
+            if now_b >= end_dt:
+                log.info(
+                    "Reached end of recording window (%s Berlin). Stopping.",
+                    end_dt.isoformat(),
+                )
                 break
 
             snap_idx += 1
-            ts_ms = int(time.time() * 1000)  # UTC ms
+            ts_ms = int(time.time() * 1000)  # Unix epoch, UTC ms
 
             try:
                 ob = client.get_order_book(symbol=symbol, limit=5)
@@ -120,13 +139,10 @@ def main():
             asks = pad_levels(asks)
 
             row = [ts_ms]
-            row = [ts_ms]  # keep timestamp as integer
-
+            # build row with *string* decimals (no scientific notation)
             for i in range(5):
                 bid_price_f, bid_qty_f = float(bids[i][0]), float(bids[i][1])
                 ask_price_f, ask_qty_f = float(asks[i][0]), float(asks[i][1])
-
-                # convert to nicely formatted strings to avoid scientific notation
                 row += [
                     fmt_price(bid_price_f),
                     fmt_qty(bid_qty_f),
@@ -142,20 +158,20 @@ def main():
             mid = 0.5 * (best_bid + best_ask)
 
             log.info(
-                "[snap %d] %s | ts_ms=%d mid≈%.2f | best_bid=%.2f (%.4f) best_ask=%.2f (%.4f)",
+                "[snap %d] %s | ts_ms=%d mid≈%.2f | best_bid=%.2f (%s) best_ask=%.2f (%s)",
                 snap_idx,
-                now_berlin.strftime("%Y-%m-%d %H:%M:%S"),
+                now_b.strftime("%Y-%m-%d %H:%M:%S"),
                 ts_ms,
                 mid,
                 best_bid,
-                float(bids[0][1]),
+                fmt_qty(float(bids[0][1])),
                 best_ask,
-                float(asks[0][1]),
+                fmt_qty(float(asks[0][1])),
             )
 
             time.sleep(interval_ms / 1000.0)
 
-    log.info("Finished recording order book depth5 for %s", symbol)
+    log.info("Finished recording order book depth5 for %s.", symbol)
 
 
 if __name__ == "__main__":
