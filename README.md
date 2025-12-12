@@ -1,219 +1,149 @@
-# 🏦 Avellaneda–Stoikov Market Maker (Crypto CEX)
+# Avellaneda–Stoikov Market Making Research Project
 
-This repository implements a modular, production-oriented **Avellaneda–Stoikov market-making engine** suitable for a centralized crypto exchange (CEX).  
-It includes simulation, risk management, and a clear separation between **strategy logic**, **market model**, and **execution layer**.
+## Objective
 
----
+The goal of this project is to **research, test, and validate market‑making models**, with a primary focus on the **Avellaneda–Stoikov framework**, before any production deployment.
 
-## 📂 Project Structure
-
-```
-avellaneda_mm/
-├─ README.md
-├─ requirements.txt
-├─ config/
-│  └─ config.example.yaml
-└─ mm/
-   ├─ __init__.py
-   ├─ avellaneda_stoikov.py
-   ├─ strategy.py
-   ├─ exchange.py              # base + simulated exchange
-   ├─ binance_exchange.py      # binance-specific connector (optional)
-   ├─ risk.py
-   ├─ utils.py
-   ├─ logging_config.py
-   └─ runner.py
-```
+This repository is intentionally structured as a **research pipeline**, not a ready‑made trading bot.
 
 ---
 
-## ⚙️ Overview
+## Why This Project Exists
 
-The system is built around a **modular architecture**:
+Market making models depend critically on:
+- execution uncertainty
+- inventory risk
+- order arrival dynamics
+- market microstructure
 
-| Layer | Responsibility | Key File(s) |
-|-------|----------------|-------------|
-| **Model** | Implements Avellaneda–Stoikov math (reservation price, spread) | `avellaneda_stoikov.py` |
-| **Strategy** | Combines model + config + exchange data → outputs bid/ask quotes | `strategy.py` |
-| **Exchange Interface** | Abstract API + simulated exchange backend | `exchange.py` |
-| **Risk Management** | Inventory, PnL, and kill-switch logic | `risk.py` |
-| **Utils & Logging** | Helper functions, rounding, timestamps, logging setup | `utils.py`, `logging_config.py` |
-| **Runner** | Event loop wiring everything together (simulation) | `runner.py` |
-| **Config** | YAML configuration for model and risk limits | `config/config.example.yaml` |
+Without realistic data and fill assumptions, theoretical results are misleading.
+This project exists to close that gap.
 
 ---
 
-## 📘 File-by-File Description
+## What Is Required to Test Market‑Making Models
 
-### `README.md`
-You’re reading it!  
-Explains project purpose, architecture, and usage.
+To correctly test an Avellaneda–Stoikov‑style strategy we need:
 
----
-
-### `requirements.txt`
-Lists minimal Python dependencies:
-
-- `numpy` — numerical operations  
-- `pyyaml` — configuration parsing  
-
-Extend this with real-exchange SDKs (Binance, OKX, etc.) or analytics libs as needed.
+- L2 order book states (bids & asks)
+- Executed trade flow
+- Exchange timestamps
+- Robust fill models
+- Deterministic backtesting
 
 ---
 
-### `config/config.example.yaml`
-Central configuration file defining:
+## Current State (Implemented)
 
-- **Market microstructure:** tick size, min size, fees.  
-- **Model parameters:** `gamma`, `A`, `k`, `T`, and `sigma_window`.  
-- **Quoting logic:** base order size, spread limits, inventory skew factor.  
-- **Inventory & risk:** caps, PnL and drawdown limits.  
-- **Simulation setup:** midprice start, volatility, refresh rate.
+### Market Data Collection
 
-Copy this as `config/config.yaml` for your environment.
-
----
-
-### `mm/avellaneda_stoikov.py`
-Mathematical core implementing the Avellaneda–Stoikov model.
-
-**Methods:**
-- `reservation_price(S, q, sigma, t)` → fair value adjusted for inventory  
-- `half_spread(sigma, t)` → optimal half-spread for given volatility and horizon  
-- `optimal_quotes(S, q, sigma, t)` → returns `(bid, ask, reservation, spread)`
-
-Contains **no trading logic** — only model math.
+- WebSocket‑based data ingestion
+- Binance Spot exchange
+- Order book diff stream (`@depth@100ms`)
+- Trade stream (`@trade`, upgradeable to `@aggTrade`)
+- Local order book reconstruction using:
+  - REST snapshot
+  - WebSocket diffs
+  - update‑ID sequencing
+- Data persisted to CSV
+- Berlin trading window: **08:00–22:00 Europe/Berlin**
+- Dockerized & cron‑friendly
 
 ---
 
-### `mm/strategy.py`
-Implements the **trading strategy** that wraps the model.
+## Recorded Data Files
 
-**Responsibilities:**
-- Compute rolling volatility from mid-prices.  
-- Use Avellaneda–Stoikov formulas to get theoretical quotes.  
-- Apply tick rounding, inventory skew, and min-spread rules.  
-- Interact with the exchange layer for placing/cancelling orders.  
-- Manage open orders, position, and PnL.  
+Per symbol, per day:
 
-Includes:
-- `StrategyConfig` dataclass — parameters loaded from YAML.  
-- `AvellanedaStoikovStrategy` — the main live strategy engine.
+- `orderbook_rest_snapshot_<SYMBOL>_<YYYYMMDD>.csv`
+- `orderbook_ws_depth_<SYMBOL>_<YYYYMMDD>.csv`
+- `trades_ws_<SYMBOL>_<YYYYMMDD>.csv`
+
+All numeric values are stored in **human‑readable fixed decimals**.
 
 ---
 
-### `mm/exchange.py`
-Defines an **exchange abstraction layer** plus a **simulated backend**.
+## Project Roadmap
 
-**Components:**
-- `ExchangeAPI` — abstract interface (for real or simulated exchanges).  
-- `SimulatedExchange` — random-walk mid-price with probabilistic fills, for offline testing.
+### Phase 1 — Market Data
+- [x] REST order book snapshot
+- [x] WebSocket depth stream
+- [x] Local order book reconstruction
+- [x] Trade stream
+- [ ] Switch to aggTrades
+- [ ] Latency metrics
+- [ ] Data validation
 
-Swap in a real implementation (e.g. Binance API) by subclassing `ExchangeAPI`.
+### Phase 2 — Backtesting Engine
+- [ ] Order book replay
+- [ ] Trade replay
+- [ ] Time‑aligned simulation
 
----
+### Phase 3 — Fill Models
+- [ ] Poisson (Avellaneda–Stoikov)
+- [ ] Price‑cross
+- [ ] Hybrid
+- [ ] Trade‑driven
 
-### `mm/risk.py`
-Contains **risk management** primitives.
+### Phase 4 — Strategy Research
+- [ ] Quoting logic
+- [ ] Parameter calibration
+- [ ] Inventory control
+- [ ] PnL attribution
 
-**Classes:**
-- `RiskState` — tracks inventory, realized/unrealized PnL, and peak equity.  
-- `RiskLimits` — config for hard limits.  
-- `RiskManager` — updates PnL and enforces inventory, loss, and drawdown limits.  
-
-Used by the strategy to auto-cancel orders or halt trading when limits are breached.
-
----
-
-### `mm/utils.py`
-Helper functions:
-- `now_ms()` → current timestamp in milliseconds.  
-- `round_to_tick(price, tick_size)` → snap to valid price increments.  
-- `clamp_qty(qty, step)` → ensure valid lot sizes.
-
----
-
-### `mm/logging_config.py`
-Sets up consistent logging across modules.
-
-```python
-setup_logging(level="INFO")
-```
-
-Used by `runner.py` to configure global logging format.
+### Phase 5 — Live / Testnet
+- [ ] Testnet trading
+- [ ] Shadow trading
+- [ ] Monitoring
+- [ ] Gradual production rollout
 
 ---
 
-### `mm/runner.py`
-Demo **event loop** that wires everything together for testing or simulation.
+## How to Run the Data Recorder
 
-**Logic:**
-1. Loads YAML config.  
-2. Creates:
-   - `SimulatedExchange` (fake price feed and fills),
-   - `AvellanedaStoikovStrategy` (strategy logic).  
-3. Runs a loop:
-   - Steps mid-price.  
-   - Feeds market data into strategy.  
-   - Polls fills and updates inventory.  
-   - Recomputes and sends quotes.  
-
-To use a real exchange, implement your own `ExchangeAPI` adapter and plug it in here.
-
----
-
-## 🧮 High-Level Flow
-
-1. **Market Data →** latest mid-price → volatility estimate.  
-2. **Model →** compute reservation price & half-spread.  
-3. **Strategy →** apply inventory skew, tick rounding, and min spread.  
-4. **Execution →** cancel old orders, place new bid/ask quotes.  
-5. **Risk →** check limits (PnL, exposure, drawdown).  
-6. **Repeat →** every few hundred milliseconds.
-
----
-
-## 🧪 Quick Start (Simulation)
-
-### 1️⃣ Install Dependencies
+### Local Python
 
 ```bash
-pip install -r requirements.txt
+export CONFIG_PATH=config/config.binance.test.yaml
+python -m mm.market_data.recorder
 ```
 
-### 2️⃣ Run the Demo Simulation
+### Docker (Recommended)
 
 ```bash
-python -m mm.runner
-```
+docker build -t avellaneda-mm .
 
-### 3️⃣ Observe Logs
-
+docker run --rm \
+  -e CONFIG_PATH=config/config.binance.test.yaml \
+  -v "$PWD/data":/app/data \
+  avellaneda-mm:latest \
+  python -m mm.market_data.recorder
 ```
-INFO runner - Starting simulated Avellaneda–Stoikov MM loop
-INFO runner - Demo finished
-```
-
-The simulation will:
-- Generate a random mid-price path.  
-- Continuously quote bid/ask around it.  
-- Update inventory and wealth dynamically.
 
 ---
 
-## 🧱 Extending Toward Production
+## Data Collector Design Rules
 
-✅ Replace `SimulatedExchange` with a real exchange API (Binance, OKX, etc.).  
-✅ Add WebSocket market-data listener for live mid-price updates.  
-✅ Re-estimate `sigma`, `A`, and `k` from real trade/order-book data.  
-✅ Add metrics (Prometheus, Influx, etc.) and logging to disk.  
-✅ Use Docker or systemd for safe process management.
+- REST snapshot is the initial truth
+- WebSocket diffs are applied sequentially
+- Quantity = 0 removes a price level
+- Sequence gaps trigger resync
+- Exchange timestamps are authoritative
 
 ---
 
-## ⚠️ Disclaimer
+## Status
 
-This project is for **educational and research purposes** only.  
-It provides mathematical and architectural scaffolding for a market-making engine,  
-but **it is not ready for live trading**.  
-Test thoroughly in a sandbox environment before any deployment with real funds.
+This project is **research‑first**.
+No capital is deployed until:
+- data is validated
+- backtests are convincing
+- risk is understood
+
+---
+
+## References
+
+- Avellaneda & Stoikov (2008)
+- Binance Spot API Docs
+- Cartea, Jaimungal & Penalva – Algorithmic and High‑Frequency Trading
