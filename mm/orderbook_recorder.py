@@ -6,6 +6,7 @@ import csv
 import logging
 from pathlib import Path
 from datetime import datetime, time as dtime
+from datetime import UTC
 
 import yaml
 from binance.client import Client
@@ -92,7 +93,8 @@ def main():
     out_dir = Path("data")
     out_dir.mkdir(exist_ok=True)
 
-    utc_date_str = datetime.utcnow().strftime("%Y%m%d")
+    utc_date_str = datetime.now(UTC).strftime("%Y%m%d")
+
     outfile = out_dir / f"orderbook_depth5_{symbol}_{utc_date_str}.csv"
 
     log.info("Writing depth5 snapshots to %s", outfile)
@@ -102,7 +104,7 @@ def main():
         columns += [f"bid{i}_price", f"bid{i}_qty", f"ask{i}_price", f"ask{i}_qty"]
 
     with outfile.open("w", newline="") as f:
-        writer = csv.writer(f)
+        writer = csv.writer(f,delimiter =';')
         writer.writerow(columns)
 
         snap_idx = 0
