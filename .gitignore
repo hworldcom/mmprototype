@@ -6,3 +6,4 @@ config/config.binance.test.yaml
 .venv
 data/
 .DS_Store
+logs/
