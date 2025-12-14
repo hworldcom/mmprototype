@@ -1,5 +1,6 @@
 # mm/market_data/recorder.py
 
+import os
 import csv
 import time
 import logging
@@ -28,13 +29,18 @@ def berlin_now():
 
 
 def run_recorder():
-    log_path = setup_logging("INFO", component="recorder")
+    symbol = os.getenv("SYMBOL", "").upper().strip()
+    if not symbol:
+        raise RuntimeError("SYMBOL environment variable is required (e.g. SYMBOL=BTCUSDT).")
+
+
+    out_dir = Path("data") / symbol
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    log_path = setup_logging("INFO", component="recorder", subdir=symbol)
     log = logging.getLogger("market_data.recorder")
     log.info("Recorder logging to %s", log_path)
 
-    symbol = "BTCUSDT"
-    out_dir = Path("data")
-    out_dir.mkdir(exist_ok=True)
 
     start = berlin_now().replace(hour=8, minute=0, second=0, microsecond=0)
     end = berlin_now().replace(hour=22, minute=0, second=0, microsecond=0)

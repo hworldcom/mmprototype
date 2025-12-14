@@ -10,18 +10,21 @@ from logging.handlers import TimedRotatingFileHandler
 def setup_logging(
     level: str = "INFO",
     component: str = "recorder",
+    subdir: str | None = None,         # e.g. "BTCUSDT"
     tz: str = "Europe/Berlin",
 ) -> Path:
     """
     Configure logging:
       - Console (stdout)
-      - Daily log file in logs/<component>/YYYY-MM-DD.log (Berlin date)
+      - Daily log file in logs/<component>/<symbol>/YYYY-MM-DD.log (Berlin date)
       - Also keeps rotated backups if the process spans midnight
 
     Returns:
       Path to the "current" daily log file.
     """
     log_dir = Path("logs") / component
+    if subdir:
+        log_dir = log_dir / subdir
     log_dir.mkdir(parents=True, exist_ok=True)
 
     now_local = datetime.now(ZoneInfo(tz))
