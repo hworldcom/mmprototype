@@ -13,7 +13,8 @@ def record_rest_snapshot(
     symbol: str,
     out_dir: Path,
     limit: int = 1000,
-) -> LocalOrderBook:
+    tag: str = "initial",  # NEW
+) -> tuple[LocalOrderBook, Path]:
     snap = client.get_order_book(symbol=symbol, limit=limit)
 
     lob = LocalOrderBook()
@@ -23,7 +24,8 @@ def record_rest_snapshot(
         last_update_id=int(snap["lastUpdateId"]),
     )
 
-    fname = out_dir / f"orderbook_rest_snapshot_{symbol}_{datetime.now(UTC).strftime('%Y%m%d')}.csv"
+    date = datetime.now(UTC).strftime("%Y%m%d")
+    fname = out_dir / f"orderbook_rest_snapshot_{symbol}_{date}_{tag}.csv"
 
     with fname.open("w", newline="") as f:
         w = csv.writer(f)
@@ -33,4 +35,4 @@ def record_rest_snapshot(
         for p, q in sorted(lob.asks.items()):
             w.writerow(["ask", f"{p:.8f}", f"{q:.8f}"])
 
-    return lob
+    return lob, fname
