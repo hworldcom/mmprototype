@@ -28,11 +28,14 @@ def berlin_now():
     return datetime.now(ZoneInfo("Europe/Berlin"))
 
 
+def _has_data(p: Path) -> bool:
+    return p.exists() and p.stat().st_size > 0
+
+
 def run_recorder():
     symbol = os.getenv("SYMBOL", "").upper().strip()
     if not symbol:
         raise RuntimeError("SYMBOL environment variable is required (e.g. SYMBOL=BTCUSDT).")
-
 
     out_dir = Path("data") / symbol
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -40,7 +43,6 @@ def run_recorder():
     log_path = setup_logging("INFO", component="recorder", subdir=symbol)
     log = logging.getLogger("market_data.recorder")
     log.info("Recorder logging to %s", log_path)
-
 
     start = berlin_now().replace(hour=8, minute=0, second=0, microsecond=0)
     end = berlin_now().replace(hour=22, minute=0, second=0, microsecond=0)
@@ -61,27 +63,39 @@ def run_recorder():
     tr_path = out_dir / f"trades_ws_{symbol}_{date}.csv"
     gap_path = out_dir / f"gaps_{symbol}_{date}.csv"
 
-    ob_f = ob_path.open("w", newline="")
-    tr_f = tr_path.open("w", newline="")
-    gap_f = gap_path.open("w", newline="")
+    ob_exists = _has_data(ob_path)
+    tr_exists = _has_data(tr_path)
+    gap_exists = _has_data(gap_path)
+
+    # Append mode prevents overwriting on restarts
+    ob_f = ob_path.open("a", newline="")
+    tr_f = tr_path.open("a", newline="")
+    gap_f = gap_path.open("a", newline="")
 
     ob_w = csv.writer(ob_f)
     tr_w = csv.writer(tr_f)
     gap_w = csv.writer(gap_f)
 
-    ob_w.writerow(
-        ["event_time_ms", "recv_time_ms"]
-        + sum(
-            [[f"bid{i}_price", f"bid{i}_qty", f"ask{i}_price", f"ask{i}_qty"] for i in range(1, DEPTH_LEVELS + 1)],
-            [],
+    # Write headers only if files are new/empty
+    if not ob_exists:
+        ob_w.writerow(
+            ["event_time_ms", "recv_time_ms"]
+            + sum(
+                [[f"bid{i}_price", f"bid{i}_qty", f"ask{i}_price", f"ask{i}_qty"]
+                 for i in range(1, DEPTH_LEVELS + 1)],
+                [],
+            )
         )
-    )
-    tr_w.writerow(["event_time_ms", "price", "qty", "is_buyer_maker"])
-    gap_w.writerow(["recv_time_ms", "event", "details"])
 
-    log.info("Orderbook output: %s", ob_path)
-    log.info("Trades output:    %s", tr_path)
-    log.info("Gaps output:      %s", gap_path)
+    if not tr_exists:
+        tr_w.writerow(["event_time_ms", "price", "qty", "is_buyer_maker"])
+
+    if not gap_exists:
+        gap_w.writerow(["recv_time_ms", "event", "details"])
+
+    log.info("Orderbook output: %s (%s)", ob_path, "append" if ob_exists else "new")
+    log.info("Trades output:    %s (%s)", tr_path, "append" if tr_exists else "new")
+    log.info("Gaps output:      %s (%s)", gap_path, "append" if gap_exists else "new")
 
     # --- state ---
     engine = OrderBookSyncEngine()
@@ -167,14 +181,18 @@ def run_recorder():
             return
 
         if len(engine.buffer) > MAX_BUFFER_WARN:
-            log.warning("Depth buffer large: %d events (not synced yet). lastUpdateId=%s",
-                        len(engine.buffer), engine.lob.last_update_id)
+            log.warning(
+                "Depth buffer large: %d events (not synced yet). lastUpdateId=%s",
+                len(engine.buffer), engine.lob.last_update_id
+            )
 
         now_s = time.time()
         if (now_s - sync_t0) > SYNC_WARN_AFTER_SEC and (now_s - last_sync_warn) > SYNC_WARN_AFTER_SEC:
             last_sync_warn = now_s
-            log.warning("Still not synced after %.0fs (buffer=%d lastUpdateId=%s)",
-                        now_s - sync_t0, len(engine.buffer), engine.lob.last_update_id)
+            log.warning(
+                "Still not synced after %.0fs (buffer=%d lastUpdateId=%s)",
+                now_s - sync_t0, len(engine.buffer), engine.lob.last_update_id
+            )
 
     def write_topn(event_time_ms: int, recv_ms: int):
         nonlocal ob_rows_written
@@ -233,7 +251,6 @@ def run_recorder():
             depth_msg_count += 1
             last_depth_event_ms = int(data.get("E", 0))
 
-            # end-of-window shutdown
             if berlin_now() >= end:
                 log.info("End window reached; closing")
                 stream.close()
@@ -247,7 +264,6 @@ def run_recorder():
                 return
 
             if result.action in ("synced", "applied") and engine.depth_synced:
-                # record top-N snapshots only when book is valid
                 write_topn(event_time_ms=int(data.get("E", 0)), recv_ms=recv_ms)
 
             if result.action == "buffered":
@@ -290,7 +306,7 @@ def run_recorder():
         on_depth=on_depth,
         on_trade=on_trade,
         on_open=on_open,
-        insecure_tls=True,  # keep for now until certs are fixed
+        insecure_tls=True,
     )
 
     log.info(
