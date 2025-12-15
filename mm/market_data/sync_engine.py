@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Callable, List, Optional
+from typing import List, Optional
 
 from .local_orderbook import LocalOrderBook
 
@@ -15,24 +15,53 @@ class SyncResult:
 
 class OrderBookSyncEngine:
     """
-    Testable engine:
-      - load_snapshot(lastUpdateId, bids, asks)
-      - feed_depth_event({U,u,b,a,E})
-      - detects gap => returns action "gap"
+    Pure state machine for Binance diff-depth local book correctness.
+
+    Responsibilities:
+      - buffer events until snapshot is available
+      - bridge snapshot lastUpdateId to WS diffs (initial sync)
+      - apply diffs sequentially once synced
+      - detect gaps and signal "gap"
+
+    Non-responsibilities:
+      - fetching snapshots
+      - websocket lifecycle
+      - file writing / logging policies
     """
 
     def __init__(self, lob: Optional[LocalOrderBook] = None):
         self.lob = lob or LocalOrderBook()
-        self.snapshot_loaded = False
-        self.depth_synced = False
+        self.snapshot_loaded: bool = False
+        self.depth_synced: bool = False
         self.buffer: List[dict] = []
 
-    def load_snapshot(self, bids, asks, last_update_id: int) -> None:
-        self.lob.load_snapshot(bids=bids, asks=asks, last_update_id=last_update_id)
+    def adopt_snapshot(self, lob: LocalOrderBook) -> None:
+        """
+        Adopt a fully-loaded LocalOrderBook from a REST snapshot.
+        Resets sync state but keeps any already-buffered WS events.
+        """
+        self.lob = lob
         self.snapshot_loaded = True
         self.depth_synced = False
 
+    def reset_for_resync(self) -> None:
+        """
+        Called when a gap is detected.
+        We keep things simple: clear the book and buffer and require a fresh snapshot.
+        """
+        self.lob = LocalOrderBook()
+        self.snapshot_loaded = False
+        self.depth_synced = False
+        self.buffer.clear()
+
     def _try_initial_sync(self) -> bool:
+        """
+        Attempt initial bridge:
+          - ignore events with u <= lastUpdateId
+          - find first event bridging snapshot boundary:
+              (U <= lastUpdateId <= u) OR (U <= lastUpdateId + 1 <= u)
+          - apply it and mark synced
+        """
         if not self.snapshot_loaded or self.lob.last_update_id is None:
             return False
 
@@ -41,6 +70,7 @@ class OrderBookSyncEngine:
 
         for ev in list(self.buffer):
             U, u = int(ev["U"]), int(ev["u"])
+
             if u <= lu:
                 self.buffer.remove(ev)
                 continue
@@ -52,15 +82,26 @@ class OrderBookSyncEngine:
                     self.depth_synced = True
                     self.buffer.remove(ev)
                     return True
+                return False
+
         return False
 
     def feed_depth_event(self, ev: dict) -> SyncResult:
-        # Always buffer until snapshot exists
+        """
+        Feed one WS depth-diff event.
+
+        Returns:
+          - buffered: not enough state to apply yet
+          - synced: initial bridge completed (book now valid)
+          - applied: sequential update applied (book remains valid)
+          - gap: sequence gap detected (book invalid until resync)
+        """
+        # No snapshot: buffer everything
         if not self.snapshot_loaded:
             self.buffer.append(ev)
             return SyncResult("buffered", "no_snapshot")
 
-        # Not synced: buffer and attempt initial bridge
+        # Snapshot exists but not synced: buffer and try bridge
         if not self.depth_synced:
             self.buffer.append(ev)
             if self._try_initial_sync():
@@ -71,14 +112,5 @@ class OrderBookSyncEngine:
         U, u = int(ev["U"]), int(ev["u"])
         ok = self.lob.apply_diff(U, u, ev.get("b", []), ev.get("a", []))
         if not ok:
-            return SyncResult("gap", f"gap_detected U={U} u={u} last={self.lob.last_update_id}")
+            return SyncResult("gap", f"gap U={U} u={u} last={self.lob.last_update_id}")
         return SyncResult("applied", f"lastUpdateId={self.lob.last_update_id}")
-
-    def reset_for_resync(self) -> None:
-        """
-        Called when a gap is detected. We keep buffering, but require a new snapshot to re-sync.
-        """
-        self.depth_synced = False
-        self.snapshot_loaded = False
-        self.lob = LocalOrderBook()
-        self.buffer.clear()
