@@ -43,6 +43,7 @@ class OrderBookSyncEngine:
         self.lob = lob
         self.snapshot_loaded = True
         self.depth_synced = False
+        # keep buffer (events may have arrived before snapshot)
 
     def reset_for_resync(self) -> None:
         """
@@ -54,16 +55,9 @@ class OrderBookSyncEngine:
         self.depth_synced = False
         self.buffer.clear()
 
-    def _try_initial_sync(self) -> bool:
-        """
-        Attempt initial bridge:
-          - ignore events with u <= lastUpdateId
-          - find first event bridging snapshot boundary:
-              (U <= lastUpdateId <= u) OR (U <= lastUpdateId + 1 <= u)
-          - apply it and mark synced
-        """
+    def _try_initial_sync(self) -> SyncResult:
         if not self.snapshot_loaded or self.lob.last_update_id is None:
-            return False
+            return SyncResult("buffered", "no_snapshot")
 
         lu = self.lob.last_update_id
         self.buffer.sort(key=lambda ev: int(ev.get("u", 0)))
@@ -71,20 +65,27 @@ class OrderBookSyncEngine:
         for ev in list(self.buffer):
             U, u = int(ev["U"]), int(ev["u"])
 
+            # drop stale updates
             if u <= lu:
                 self.buffer.remove(ev)
                 continue
 
-            bridges = (U <= lu <= u) or (U <= lu + 1 <= u)
-            if bridges:
-                ok = self.lob.apply_diff(U, u, ev.get("b", []), ev.get("a", []))
-                if ok:
-                    self.depth_synced = True
-                    self.buffer.remove(ev)
-                    return True
-                return False
+            # STRICT Binance bridge condition:
+            # U <= lastUpdateId + 1 <= u
+            bridges = (U <= lu + 1 <= u)
+            if not bridges:
+                continue
 
-        return False
+            ok = self.lob.apply_diff(U, u, ev.get("b", []), ev.get("a", []))
+            if ok:
+                self.depth_synced = True
+                self.buffer.remove(ev)
+                return SyncResult("synced", f"lastUpdateId={self.lob.last_update_id}")
+
+            # If the bridge candidate fails to apply, we are inconsistent -> resync.
+            return SyncResult("gap", f"bridge_apply_failed U={U} u={u} last={lu}")
+
+        return SyncResult("buffered", "not_synced")
 
     def feed_depth_event(self, ev: dict) -> SyncResult:
         """
@@ -104,9 +105,7 @@ class OrderBookSyncEngine:
         # Snapshot exists but not synced: buffer and try bridge
         if not self.depth_synced:
             self.buffer.append(ev)
-            if self._try_initial_sync():
-                return SyncResult("synced", f"lastUpdateId={self.lob.last_update_id}")
-            return SyncResult("buffered", "not_synced")
+            return self._try_initial_sync()
 
         # Synced: apply sequentially or detect gap
         U, u = int(ev["U"]), int(ev["u"])
