@@ -73,7 +73,7 @@ def test_resync_writes_gap_and_snapshot_tags(monkeypatch, tmp_path):
     assert len(gaps) == 1
 
     rows = list(csv.reader(gaps[0].open()))
-    assert rows[0] == ["recv_time_ms", "event", "details"]
-    events = [r[1] for r in rows[1:]]
+    assert rows[0] == ["run_id","recv_time_ms", "event", "details"]
+    events = [r[2] for r in rows[1:]]
     assert "resync_start" in events
     assert "resync_done" in events

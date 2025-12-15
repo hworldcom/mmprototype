@@ -44,6 +44,10 @@ def run_recorder():
     log = logging.getLogger("market_data.recorder")
     log.info("Recorder logging to %s", log_path)
 
+    # Unique identifier for this recorder process
+    run_id = int(time.time() * 1000)
+    log.info("Run ID: %s", run_id)
+
     start = berlin_now().replace(hour=8, minute=0, second=0, microsecond=0)
     end = berlin_now().replace(hour=22, minute=0, second=0, microsecond=0)
 
@@ -76,10 +80,10 @@ def run_recorder():
     tr_w = csv.writer(tr_f)
     gap_w = csv.writer(gap_f)
 
-    # Write headers only if files are new/empty
+    # Headers (only once per file)
     if not ob_exists:
         ob_w.writerow(
-            ["event_time_ms", "recv_time_ms"]
+            ["run_id", "event_time_ms", "recv_time_ms"]
             + sum(
                 [[f"bid{i}_price", f"bid{i}_qty", f"ask{i}_price", f"ask{i}_qty"]
                  for i in range(1, DEPTH_LEVELS + 1)],
@@ -88,10 +92,10 @@ def run_recorder():
         )
 
     if not tr_exists:
-        tr_w.writerow(["event_time_ms", "price", "qty", "is_buyer_maker"])
+        tr_w.writerow(["run_id", "event_time_ms", "price", "qty", "is_buyer_maker"])
 
     if not gap_exists:
-        gap_w.writerow(["recv_time_ms", "event", "details"])
+        gap_w.writerow(["run_id", "recv_time_ms", "event", "details"])
 
     log.info("Orderbook output: %s (%s)", ob_path, "append" if ob_exists else "new")
     log.info("Trades output:    %s (%s)", tr_path, "append" if tr_exists else "new")
@@ -113,17 +117,13 @@ def run_recorder():
     last_depth_event_ms = None
     last_trade_event_ms = None
 
-    # sync warning timers (reset after each snapshot load)
     sync_t0 = time.time()
     last_sync_warn = time.time()
 
     def write_gap(event: str, details: str):
-        """
-        Append an event to gaps CSV. This is the 'source of truth' for data quality windows.
-        """
         try:
             recv_ms = int(time.time() * 1000)
-            gap_w.writerow([recv_ms, event, details])
+            gap_w.writerow([run_id, recv_ms, event, details])
             gap_f.flush()
         except Exception:
             log.exception("Failed writing gap event (%s, %s)", event, details)
@@ -136,14 +136,10 @@ def run_recorder():
         last_hb = now_s
 
         uptime = now_s - proc_t0
-        ob_size = ob_path.stat().st_size if ob_path.exists() else 0
-        tr_size = tr_path.stat().st_size if tr_path.exists() else 0
-        gap_size = gap_path.stat().st_size if gap_path.exists() else 0
-
         log.info(
             "HEARTBEAT uptime=%.0fs synced=%s snapshot=%s lastUpdateId=%s "
             "depth_msgs=%d trade_msgs=%d ob_rows=%d tr_rows=%d buffer=%d "
-            "last_depth_E=%s last_trade_E=%s files=(ob=%dB tr=%dB gaps=%dB)",
+            "last_depth_E=%s last_trade_E=%s",
             uptime,
             engine.depth_synced,
             engine.snapshot_loaded,
@@ -155,9 +151,6 @@ def run_recorder():
             len(engine.buffer),
             last_depth_event_ms,
             last_trade_event_ms,
-            ob_size,
-            tr_size,
-            gap_size,
         )
 
     def fetch_snapshot(tag: str):
@@ -181,18 +174,13 @@ def run_recorder():
             return
 
         if len(engine.buffer) > MAX_BUFFER_WARN:
-            log.warning(
-                "Depth buffer large: %d events (not synced yet). lastUpdateId=%s",
-                len(engine.buffer), engine.lob.last_update_id
-            )
+            log.warning("Depth buffer large: %d events", len(engine.buffer))
 
         now_s = time.time()
         if (now_s - sync_t0) > SYNC_WARN_AFTER_SEC and (now_s - last_sync_warn) > SYNC_WARN_AFTER_SEC:
             last_sync_warn = now_s
-            log.warning(
-                "Still not synced after %.0fs (buffer=%d lastUpdateId=%s)",
-                now_s - sync_t0, len(engine.buffer), engine.lob.last_update_id
-            )
+            log.warning("Still not synced after %.0fs (buffer=%d)",
+                        now_s - sync_t0, len(engine.buffer))
 
     def write_topn(event_time_ms: int, recv_ms: int):
         nonlocal ob_rows_written
@@ -200,7 +188,7 @@ def run_recorder():
         bids += [(0.0, 0.0)] * (DEPTH_LEVELS - len(bids))
         asks += [(0.0, 0.0)] * (DEPTH_LEVELS - len(asks))
 
-        row = [event_time_ms, recv_ms]
+        row = [run_id, event_time_ms, recv_ms]
         for i in range(DEPTH_LEVELS):
             bp, bq = bids[i]
             ap, aq = asks[i]
@@ -237,7 +225,7 @@ def run_recorder():
 
     def on_open():
         try:
-            log.info("WS opened → fetching REST snapshot (tag=initial, limit=%d)", SNAPSHOT_LIMIT)
+            log.info("WS opened → fetching REST snapshot (initial)")
             fetch_snapshot("initial")
         except Exception:
             log.exception("Failed initial snapshot; closing WS")
@@ -246,7 +234,6 @@ def run_recorder():
 
     def on_depth(data, recv_ms):
         nonlocal depth_msg_count, last_depth_event_ms
-
         try:
             depth_msg_count += 1
             last_depth_event_ms = int(data.get("E", 0))
@@ -260,7 +247,6 @@ def run_recorder():
 
             if result.action == "gap":
                 resync(result.details)
-                log_heartbeat()
                 return
 
             if result.action in ("synced", "applied") and engine.depth_synced:
@@ -277,13 +263,13 @@ def run_recorder():
 
     def on_trade(data, recv_ms):
         nonlocal trade_msg_count, tr_rows_written, last_trade_event_ms
-
         try:
             trade_msg_count += 1
             last_trade_event_ms = int(data.get("E", 0))
 
             tr_w.writerow(
                 [
+                    run_id,
                     int(data.get("E", 0)),
                     f'{float(data["p"]):.{DECIMALS}f}',
                     f'{float(data["q"]):.{DECIMALS}f}',
@@ -309,27 +295,18 @@ def run_recorder():
         insecure_tls=True,
     )
 
-    log.info(
-        "Starting recorder: symbol=%s depth_levels=%d snapshot_limit=%d heartbeat=%ds",
-        symbol, DEPTH_LEVELS, SNAPSHOT_LIMIT, HEARTBEAT_SEC
-    )
+    log.info("Starting recorder: symbol=%s depth_levels=%d snapshot_limit=%d heartbeat=%ds",
+             symbol, DEPTH_LEVELS, SNAPSHOT_LIMIT, HEARTBEAT_SEC)
     log.info("Connecting WS: %s", ws_url)
 
     try:
         stream.run_forever()
     finally:
-        try:
-            ob_f.close()
-        except Exception:
-            pass
-        try:
-            tr_f.close()
-        except Exception:
-            pass
-        try:
-            gap_f.close()
-        except Exception:
-            pass
+        for f in (ob_f, tr_f, gap_f):
+            try:
+                f.close()
+            except Exception:
+                pass
         log_heartbeat(force=True)
         log.info("Recorder stopped.")
 
