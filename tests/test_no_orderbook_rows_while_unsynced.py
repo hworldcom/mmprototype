@@ -66,11 +66,12 @@ def test_no_orderbook_rows_until_synced(monkeypatch, tmp_path):
     monkeypatch.setattr(recorder_mod.time, "time", lambda: 1.0)
     recorder_mod.run_recorder()
 
-    date = recorder_mod.datetime.utcnow().strftime("%Y%m%d")
-    day_dir = tmp_path / "data" / "ETHUSDT" / date
-    orderbook_path = day_dir / "orderbook.csv"
+    symbol = "ETHUSDT"
+    day = recorder_mod.berlin_now().strftime("%Y%m%d")
+    day_dir = tmp_path / "data" / symbol / day
+    orderbook_path = day_dir / f"orderbook_ws_depth_{symbol}_{day}.csv"
 
     rows = list(csv.reader(orderbook_path.open()))
     # header only (no data rows) because never synced
     assert len(rows) == 1
-    assert rows[0][0:2] == ["run_id", "epoch_id"]
+    assert rows[0][:4] == ["event_time_ms", "recv_time_ms", "run_id", "epoch_id"]

@@ -1,7 +1,9 @@
 import csv
 from pathlib import Path
 from binance.client import Client
+
 from .local_orderbook import LocalOrderBook
+
 
 def record_rest_snapshot(
     client: Client,
@@ -14,6 +16,10 @@ def record_rest_snapshot(
     tag: str,
     decimals: int = 8,
 ) -> tuple[LocalOrderBook, Path, int]:
+    """Fetch a REST snapshot and persist it for audit/replay.
+
+    Snapshot path naming is event-driven so multiple snapshots per day (resyncs) do not overwrite.
+    """
     snap = client.get_order_book(symbol=symbol, limit=limit)
     last_update_id = int(snap["lastUpdateId"])
 

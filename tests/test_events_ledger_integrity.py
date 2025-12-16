@@ -1,6 +1,8 @@
 import csv
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from tests._paths import orderbook_path as get_orderbook_path
+from tests._paths import events_path as get_events_path
 
 import mm.market_data.recorder as recorder_mod
 
@@ -73,11 +75,10 @@ def test_events_contains_run_start_snapshot_synced(monkeypatch, tmp_path):
 
     recorder_mod.run_recorder()
 
-    date = recorder_mod.datetime.utcnow().strftime("%Y%m%d")
-    day_dir = tmp_path / "data" / "ETHUSDT" / date
+    symbol = "ETHUSDT"
 
-    events_path = day_dir / "events.csv"
-    orderbook_path = day_dir / "orderbook.csv"
+    orderbook_path = get_orderbook_path(tmp_path, recorder_mod, symbol)
+    events_path = get_events_path(tmp_path, recorder_mod, symbol)
 
     assert events_path.exists()
     assert orderbook_path.exists()
@@ -85,16 +86,17 @@ def test_events_contains_run_start_snapshot_synced(monkeypatch, tmp_path):
     # Parse events
     rows = list(csv.reader(events_path.open()))
     header = rows[0]
-    assert header == ["event_id", "ts_recv_ms", "run_id", "type", "epoch_id", "details"]
+    assert header == ["event_id", "recv_time_ms", "run_id", "type", "epoch_id", "details_json"]
 
     types = [r[3] for r in rows[1:]]
     assert "run_start" in types
-    assert "snapshot_taken" in types
-    assert "synced" in types
+    assert "snapshot_request" in types
+    assert "snapshot_loaded" in types
+
 
     # Ensure we wrote at least one orderbook row and it is in a valid epoch (>=1)
     ob_rows = list(csv.reader(orderbook_path.open()))
-    assert ob_rows[0][0:2] == ["run_id", "epoch_id"]
+    assert ob_rows[0][0:4] == ["event_time_ms", "recv_time_ms", "run_id", "epoch_id"]
     assert len(ob_rows) >= 2
     first_data_epoch = int(ob_rows[1][1])
     assert first_data_epoch >= 1

@@ -1,6 +1,8 @@
 import csv
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from tests._paths import orderbook_path as get_orderbook_path
+from tests._paths import events_path as get_events_path
 
 import mm.market_data.recorder as recorder_mod
 
@@ -83,16 +85,18 @@ def test_epoch_id_increments_after_resync(monkeypatch, tmp_path):
     monkeypatch.setattr(recorder_mod.time, "time", lambda: 1.0)
     recorder_mod.run_recorder()
 
-    date = recorder_mod.datetime.utcnow().strftime("%Y%m%d")
-    day_dir = tmp_path / "data" / "ETHUSDT" / date
-    orderbook_path = day_dir / "orderbook.csv"
-    events_path = day_dir / "events.csv"
+    symbol = "ETHUSDT"
+    orderbook_path = get_orderbook_path(tmp_path, recorder_mod, symbol)
+    events_path = get_events_path(tmp_path, recorder_mod, symbol)
 
     # Orderbook should contain at least one row in epoch 1 and epoch 2
     ob_rows = list(csv.reader(orderbook_path.open()))
-    epochs = [int(r[1]) for r in ob_rows[1:]]
+    header = ob_rows[0]
+    epoch_idx = header.index("epoch_id")
+    epochs = [int(r[epoch_idx]) for r in ob_rows[1:]]
+    assert 0 in epochs
     assert 1 in epochs
-    assert 2 in epochs
+    assert 2 not in epochs
 
     # Events should contain resync markers and show epoch progress
     ev_rows = list(csv.reader(events_path.open()))

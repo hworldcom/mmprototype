@@ -1,4 +1,7 @@
-symbol: "BTCUSDT"
+# specify symbol in env variable
+#symbol:
+#  - BTCUSDT
+#  - ETHUSDT
 
 log_level: "INFO"
 

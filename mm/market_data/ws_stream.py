@@ -1,8 +1,15 @@
-import ssl, time, json, logging
+import ssl
+import time
+import json
+import logging
 from typing import Callable, Optional
+
 import websocket
 
+
 class BinanceWSStream:
+    """Thin websocket wrapper that routes depth/trade messages to callbacks."""
+
     def __init__(
         self,
         ws_url: str,
@@ -16,37 +23,40 @@ class BinanceWSStream:
         self.on_trade = on_trade
         self.on_open_cb = on_open
         self.insecure_tls = insecure_tls
-        self._ws_app = None
-        self._log = logging.getLogger("market_data.ws_stream")
 
-    def close(self):
-        try:
-            if self._ws_app and self._ws_app.sock:
-                self._ws_app.close()
-        except Exception:
-            pass
+        self._ws_app: Optional[websocket.WebSocketApp] = None
+        self._log = logging.getLogger("websocket")
 
-    def run_forever(self):
+    def run_forever(self) -> None:
         def _on_open(ws):
-            self._log.info("Websocket connected")
             if self.on_open_cb:
                 self.on_open_cb()
 
-        def _on_message(ws, message: str):
+        def _on_message(ws, msg: str):
             recv_ms = int(time.time() * 1000)
-            payload = json.loads(message)
+            try:
+                payload = json.loads(msg)
+            except Exception:
+                self._log.exception("Failed to parse WS message")
+                return
+
+            # Combined streams send {"stream": "...", "data": {...}}
+            stream = payload.get("stream", "")
             data = payload.get("data", payload)
-            et = data.get("e")
-            if et == "depthUpdate":
-                self.on_depth(data, recv_ms)
-            elif et == "trade":
-                self.on_trade(data, recv_ms)
 
-        def _on_error(ws, error):
-            self._log.error("WebSocket error: %s", error)
+            try:
+                if "@depth" in stream or data.get("e") == "depthUpdate":
+                    self.on_depth(data, recv_ms)
+                elif "@trade" in stream or data.get("e") == "trade":
+                    self.on_trade(data, recv_ms)
+            except Exception:
+                self._log.exception("Callback error (stream=%s)", stream)
 
-        def _on_close(ws, code, msg):
-            self._log.info("Websocket closed code=%s msg=%s", code, msg)
+        def _on_error(ws, err):
+            self._log.error("WebSocket error: %s", err)
+
+        def _on_close(ws, status_code, msg):
+            self._log.info("WebSocket closed: code=%s msg=%s", status_code, msg)
 
         self._ws_app = websocket.WebSocketApp(
             self.ws_url,
@@ -61,3 +71,10 @@ class BinanceWSStream:
             sslopt = {"cert_reqs": ssl.CERT_NONE, "check_hostname": False}
 
         self._ws_app.run_forever(sslopt=sslopt)
+
+    def close(self) -> None:
+        if self._ws_app is not None:
+            try:
+                self._ws_app.close()
+            except Exception:
+                pass

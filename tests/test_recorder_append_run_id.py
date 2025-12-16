@@ -12,25 +12,29 @@ class DummyLob:
         self.asks = {101.0: 1.0}
 
     def apply_diff(self, U, u, bids, asks):
-        # Always succeed and advance update id
         self.last_update_id = u
         return True
 
     def top_n(self, n):
         return sorted(self.bids.items(), reverse=True)[:n], sorted(self.asks.items())[:n]
 
+
 def test_appends_and_run_id_changes(monkeypatch, tmp_path):
-    # Ensure we are inside the recording window
+    # Fixed Berlin time inside recording window
     fixed_now = datetime(2025, 12, 15, 12, 0, 0, tzinfo=ZoneInfo("Europe/Berlin"))
     monkeypatch.setattr(recorder_mod, "berlin_now", lambda: fixed_now)
 
-    monkeypatch.setenv("SYMBOL", "ETHUSDT")
+    symbol = "ETHUSDT"
+    monkeypatch.setenv("SYMBOL", symbol)
 
+    # Redirect data/ into tmp_path
     orig_path = recorder_mod.Path
+
     def PatchedPath(p):
         if p == "data":
             return orig_path(tmp_path / "data")
         return orig_path(p)
+
     monkeypatch.setattr(recorder_mod, "Path", PatchedPath)
 
     # Avoid touching real logs
@@ -41,9 +45,10 @@ def test_appends_and_run_id_changes(monkeypatch, tmp_path):
         snap_path = snapshots_dir / f"snapshot_{event_id:06d}_{tag}.csv"
         snap_path.write_text("dummy\n", encoding="utf-8")
         return DummyLob(last_update_id=10), snap_path, 10
+
     monkeypatch.setattr(recorder_mod, "record_rest_snapshot", fake_record_rest_snapshot)
 
-    # Fake WS stream: open, then emit one bridging depth event, then one applied depth event, then stop
+    # Fake WS stream: open, then emit 2 depth events
     class FakeStream:
         def __init__(self, ws_url, on_depth, on_trade, on_open, insecure_tls):
             self.on_depth = on_depth
@@ -51,23 +56,34 @@ def test_appends_and_run_id_changes(monkeypatch, tmp_path):
 
         def run_forever(self):
             self.on_open()
-            self.on_depth({"e":"depthUpdate","E":1,"U":10,"u":11,"b":[],"a":[]}, 111)
-            self.on_depth({"e":"depthUpdate","E":2,"U":12,"u":12,"b":[],"a":[]}, 222)
+            # bridge
+            self.on_depth({"e": "depthUpdate", "E": 1, "U": 10, "u": 11, "b": [], "a": []}, 111)
+            # applied
+            self.on_depth({"e": "depthUpdate", "E": 2, "U": 12, "u": 12, "b": [], "a": []}, 222)
+
         def close(self):
             pass
 
     monkeypatch.setattr(recorder_mod, "BinanceWSStream", FakeStream)
 
-    # Run 1: time.time fixed to produce run_id=1000ms
-    monkeypatch.setattr(recorder_mod.time, "time", lambda: 1.0)
+    # Run 1: run_id uses time.time() * 1000
+    monkeypatch.setattr(recorder_mod.time, "time", lambda: 1.0)  # run_id=1000
     recorder_mod.run_recorder()
 
-    # Run 2: time.time fixed to produce run_id=2000ms
-    monkeypatch.setattr(recorder_mod.time, "time", lambda: 2.0)
+    # Run 2: different run_id
+    monkeypatch.setattr(recorder_mod.time, "time", lambda: 2.0)  # run_id=2000
     recorder_mod.run_recorder()
 
-    date = recorder_mod.datetime.utcnow().strftime("%Y%m%d")
-    ob_path = tmp_path / "data" / "ETHUSDT" / date / "orderbook.csv"
+    day = fixed_now.strftime("%Y%m%d")
+    ob_path = tmp_path / "data" / symbol / day / f"orderbook_ws_depth_{symbol}_{day}.csv"
+
     rows = list(csv.reader(ob_path.open()))
-    assert rows[0][0] == "run_id"
-    assert rows[1][0] != rows[-1][0]
+
+    # Header begins with event_time_ms, recv_time_ms, run_id, epoch_id
+    assert rows[0][:4] == ["event_time_ms", "recv_time_ms", "run_id", "epoch_id"]
+
+    # We expect data rows from both runs (append mode)
+    run_ids = [r[2] for r in rows[1:] if r and r[2].isdigit()]
+    assert "1000" in run_ids
+    assert "2000" in run_ids
+    assert run_ids[0] != run_ids[-1]

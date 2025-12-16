@@ -3,6 +3,9 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import mm.market_data.recorder as recorder_mod
+from tests._paths import orderbook_path as get_orderbook_path
+from tests._paths import trades_path as get_trades_path
+from tests._paths import events_path as get_events_path
 
 
 class DummyLob:
@@ -69,18 +72,20 @@ def test_headers_written_once_across_restarts(monkeypatch, tmp_path):
     recorder_mod.run_recorder()
 
     day_dir = tmp_path / "data" / "ETHUSDT" / date
-    orderbook_path = day_dir / "orderbook.csv"
-    trades_path = day_dir / "trades.csv"
-    events_path = day_dir / "events.csv"
+
+    symbol = "ETHUSDT"
+    orderbook_path = get_orderbook_path(tmp_path, recorder_mod, symbol)
+    trades_path = get_trades_path(tmp_path, recorder_mod, symbol)
+    events_path = get_events_path(tmp_path, recorder_mod, symbol)
 
     # Count header occurrences in each CSV (header row repeated indicates bug)
     def header_count(path, expected_header):
         rows = list(csv.reader(path.open()))
         return sum(1 for r in rows if r == expected_header)
 
-    ob_header = ["run_id", "epoch_id", "event_time_ms", "recv_time_ms"]
-    tr_header = ["run_id", "event_time_ms", "price", "qty", "is_buyer_maker"]
-    ev_header = ["event_id", "ts_recv_ms", "run_id", "type", "epoch_id", "details"]
+    ob_header = ["event_time_ms", "recv_time_ms", "run_id", "epoch_id"]
+    tr_header = ["event_time_ms", "recv_time_ms", "run_id", "price", "qty", "is_buyer_maker"]
+    ev_header = ["event_id", "recv_time_ms", "run_id", "type", "epoch_id", "details_json"]
 
     # orderbook header has extra columns beyond the first 4; compare prefix for robustness
     ob_rows = list(csv.reader(orderbook_path.open()))
