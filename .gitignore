@@ -7,3 +7,5 @@ config/config.binance.test.yaml
 data/
 .DS_Store
 logs/
+git
+restore

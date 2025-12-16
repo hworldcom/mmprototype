@@ -1,38 +1,34 @@
-# mm/market_data/snapshot.py
-
 import csv
 from pathlib import Path
-from datetime import datetime, UTC
 from binance.client import Client
-
 from .local_orderbook import LocalOrderBook
-
 
 def record_rest_snapshot(
     client: Client,
     symbol: str,
-    out_dir: Path,
-    limit: int = 1000,
-    tag: str = "initial",  # NEW
-) -> tuple[LocalOrderBook, Path]:
+    day_dir: Path,
+    snapshots_dir: Path,
+    limit: int,
+    run_id: int,
+    event_id: int,
+    tag: str,
+    decimals: int = 8,
+) -> tuple[LocalOrderBook, Path, int]:
     snap = client.get_order_book(symbol=symbol, limit=limit)
+    last_update_id = int(snap["lastUpdateId"])
 
     lob = LocalOrderBook()
-    lob.load_snapshot(
-        bids=snap["bids"],
-        asks=snap["asks"],
-        last_update_id=int(snap["lastUpdateId"]),
-    )
+    lob.load_snapshot(bids=snap["bids"], asks=snap["asks"], last_update_id=last_update_id)
 
-    date = datetime.now(UTC).strftime("%Y%m%d")
-    fname = out_dir / f"orderbook_rest_snapshot_{symbol}_{date}_{tag}.csv"
+    snapshots_dir.mkdir(parents=True, exist_ok=True)
+    path = snapshots_dir / f"snapshot_{event_id:06d}_{tag}.csv"
 
-    with fname.open("w", newline="") as f:
+    with path.open("w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["side", "price", "qty"])
+        w.writerow(["run_id", "event_id", "side", "price", "qty", "lastUpdateId"])
         for p, q in sorted(lob.bids.items(), reverse=True):
-            w.writerow(["bid", f"{p:.8f}", f"{q:.8f}"])
+            w.writerow([run_id, event_id, "bid", f"{p:.{decimals}f}", f"{q:.{decimals}f}", last_update_id])
         for p, q in sorted(lob.asks.items()):
-            w.writerow(["ask", f"{p:.8f}", f"{q:.8f}"])
+            w.writerow([run_id, event_id, "ask", f"{p:.{decimals}f}", f"{q:.{decimals}f}", last_update_id])
 
-    return lob, fname
+    return lob, path, last_update_id

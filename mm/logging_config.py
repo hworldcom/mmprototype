@@ -1,18 +1,9 @@
-# mm/logging_config.py
-
 import logging
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from logging.handlers import TimedRotatingFileHandler
 
-
-def setup_logging(
-    level: str = "INFO",
-    component: str = "recorder",
-    subdir: str | None = None,         # e.g. "BTCUSDT"
-    tz: str = "Europe/Berlin",
-) -> Path:
+def setup_logging(level: str = "INFO", component: str = "app", subdir: str = "default") -> Path:
     """
     Configure logging:
       - Console (stdout)
@@ -22,39 +13,22 @@ def setup_logging(
     Returns:
       Path to the "current" daily log file.
     """
-    log_dir = Path("logs") / component
-    if subdir:
-        log_dir = log_dir / subdir
+
+    log_dir = Path("logs") / component / subdir
     log_dir.mkdir(parents=True, exist_ok=True)
-
-    now_local = datetime.now(ZoneInfo(tz))
-    daily_name = f"{now_local.strftime('%Y-%m-%d')}.log"
-    log_path = log_dir / daily_name
-
-    fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s - %(message)s")
-
-    # Console handler
-    console = logging.StreamHandler()
-    console.setFormatter(fmt)
-
-    # File handler: rotates at midnight (local time for naming, rotation uses system time)
-    # We name the base file using Berlin date; TimedRotatingFileHandler will rotate if it crosses midnight.
-    file_handler = TimedRotatingFileHandler(
-        filename=str(log_path),
-        when="midnight",
-        interval=1,
-        backupCount=30,   # keep 30 days of rotated backups
-        encoding="utf-8",
-        utc=False,
-    )
-    file_handler.setFormatter(fmt)
+    date_str = datetime.now(ZoneInfo("Europe/Berlin")).strftime("%Y-%m-%d")
+    log_path = log_dir / f"{date_str}.log"
 
     root = logging.getLogger()
-    root.setLevel(level)
+    root.setLevel(getattr(logging, level.upper(), logging.INFO))
+    for h in list(root.handlers):
+        root.removeHandler(h)
 
-    # Avoid duplicate handlers if setup_logging() is called more than once
-    root.handlers.clear()
-    root.addHandler(console)
-    root.addHandler(file_handler)
-
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s - %(message)s")
+    fh = logging.FileHandler(log_path, encoding="utf-8")
+    fh.setFormatter(fmt)
+    sh = logging.StreamHandler()
+    sh.setFormatter(fmt)
+    root.addHandler(fh)
+    root.addHandler(sh)
     return log_path

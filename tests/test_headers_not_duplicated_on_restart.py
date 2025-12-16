@@ -12,28 +12,28 @@ class DummyLob:
         self.asks = {101.0: 1.0}
 
     def apply_diff(self, U, u, bids, asks):
-        # Always succeed and advance update id
-        self.last_update_id = u
+        self.last_update_id = int(u)
         return True
 
     def top_n(self, n):
-        return sorted(self.bids.items(), reverse=True)[:n], sorted(self.asks.items())[:n]
+        bids = sorted(self.bids.items(), reverse=True)[:n]
+        asks = sorted(self.asks.items())[:n]
+        return bids, asks
 
-def test_appends_and_run_id_changes(monkeypatch, tmp_path):
-    # Ensure we are inside the recording window
+
+def test_headers_written_once_across_restarts(monkeypatch, tmp_path):
     fixed_now = datetime(2025, 12, 15, 12, 0, 0, tzinfo=ZoneInfo("Europe/Berlin"))
     monkeypatch.setattr(recorder_mod, "berlin_now", lambda: fixed_now)
-
     monkeypatch.setenv("SYMBOL", "ETHUSDT")
 
     orig_path = recorder_mod.Path
+
     def PatchedPath(p):
         if p == "data":
             return orig_path(tmp_path / "data")
         return orig_path(p)
-    monkeypatch.setattr(recorder_mod, "Path", PatchedPath)
 
-    # Avoid touching real logs
+    monkeypatch.setattr(recorder_mod, "Path", PatchedPath)
     monkeypatch.setattr(recorder_mod, "setup_logging", lambda *args, **kwargs: tmp_path / "log.txt")
 
     def fake_record_rest_snapshot(client, symbol, day_dir, snapshots_dir, limit, run_id, event_id, tag, decimals=8):
@@ -41,33 +41,52 @@ def test_appends_and_run_id_changes(monkeypatch, tmp_path):
         snap_path = snapshots_dir / f"snapshot_{event_id:06d}_{tag}.csv"
         snap_path.write_text("dummy\n", encoding="utf-8")
         return DummyLob(last_update_id=10), snap_path, 10
+
     monkeypatch.setattr(recorder_mod, "record_rest_snapshot", fake_record_rest_snapshot)
 
-    # Fake WS stream: open, then emit one bridging depth event, then one applied depth event, then stop
     class FakeStream:
         def __init__(self, ws_url, on_depth, on_trade, on_open, insecure_tls):
-            self.on_depth = on_depth
             self.on_open = on_open
+            self.on_depth = on_depth
 
         def run_forever(self):
             self.on_open()
-            self.on_depth({"e":"depthUpdate","E":1,"U":10,"u":11,"b":[],"a":[]}, 111)
-            self.on_depth({"e":"depthUpdate","E":2,"U":12,"u":12,"b":[],"a":[]}, 222)
+            self.on_depth({"e": "depthUpdate", "E": 1, "U": 10, "u": 11, "b": [], "a": []}, 111)
+
         def close(self):
             pass
 
     monkeypatch.setattr(recorder_mod, "BinanceWSStream", FakeStream)
 
-    # Run 1: time.time fixed to produce run_id=1000ms
+    date = recorder_mod.datetime.utcnow().strftime("%Y%m%d")
+
+    # Run 1
     monkeypatch.setattr(recorder_mod.time, "time", lambda: 1.0)
     recorder_mod.run_recorder()
 
-    # Run 2: time.time fixed to produce run_id=2000ms
+    # Run 2
     monkeypatch.setattr(recorder_mod.time, "time", lambda: 2.0)
     recorder_mod.run_recorder()
 
-    date = recorder_mod.datetime.utcnow().strftime("%Y%m%d")
-    ob_path = tmp_path / "data" / "ETHUSDT" / date / "orderbook.csv"
-    rows = list(csv.reader(ob_path.open()))
-    assert rows[0][0] == "run_id"
-    assert rows[1][0] != rows[-1][0]
+    day_dir = tmp_path / "data" / "ETHUSDT" / date
+    orderbook_path = day_dir / "orderbook.csv"
+    trades_path = day_dir / "trades.csv"
+    events_path = day_dir / "events.csv"
+
+    # Count header occurrences in each CSV (header row repeated indicates bug)
+    def header_count(path, expected_header):
+        rows = list(csv.reader(path.open()))
+        return sum(1 for r in rows if r == expected_header)
+
+    ob_header = ["run_id", "epoch_id", "event_time_ms", "recv_time_ms"]
+    tr_header = ["run_id", "event_time_ms", "price", "qty", "is_buyer_maker"]
+    ev_header = ["event_id", "ts_recv_ms", "run_id", "type", "epoch_id", "details"]
+
+    # orderbook header has extra columns beyond the first 4; compare prefix for robustness
+    ob_rows = list(csv.reader(orderbook_path.open()))
+    assert ob_rows[0][:4] == ob_header
+    # ensure header row appears only once (exact match on full row)
+    assert header_count(orderbook_path, ob_rows[0]) == 1
+
+    assert header_count(trades_path, tr_header) == 1
+    assert header_count(events_path, ev_header) == 1

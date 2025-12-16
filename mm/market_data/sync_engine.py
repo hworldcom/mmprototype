@@ -9,7 +9,7 @@ from .local_orderbook import LocalOrderBook
 
 @dataclass
 class SyncResult:
-    action: str  # "buffered" | "synced" | "applied" | "gap"
+    action: str
     details: str = ""
 
 
@@ -31,8 +31,8 @@ class OrderBookSyncEngine:
 
     def __init__(self, lob: Optional[LocalOrderBook] = None):
         self.lob = lob or LocalOrderBook()
-        self.snapshot_loaded: bool = False
-        self.depth_synced: bool = False
+        self.snapshot_loaded = False
+        self.depth_synced = False
         self.buffer: List[dict] = []
 
     def adopt_snapshot(self, lob: LocalOrderBook) -> None:
@@ -58,8 +58,7 @@ class OrderBookSyncEngine:
     def _try_initial_sync(self) -> SyncResult:
         if not self.snapshot_loaded or self.lob.last_update_id is None:
             return SyncResult("buffered", "no_snapshot")
-
-        lu = self.lob.last_update_id
+        lu = int(self.lob.last_update_id)
         self.buffer.sort(key=lambda ev: int(ev.get("u", 0)))
 
         for ev in list(self.buffer):

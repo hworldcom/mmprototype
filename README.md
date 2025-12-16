@@ -99,51 +99,43 @@ All numeric values are stored in **human‑readable fixed decimals**.
 
 ---
 
-## How to Run the Data Recorder
+# Binance Market Data Recorder (Depth + Trades + Events Ledger)
 
-### Local Python
+One process per symbol. Produces three primary files per day:
 
-```bash
-export CONFIG_PATH=config/config.binance.test.yaml
-python -m mm.market_data.recorder
+- `orderbook.csv`: top-10 bids/asks frames (only when book is synced)
+- `trades.csv`: trade prints
+- `events.csv`: authoritative ledger for run boundaries and sync/resync epochs
+- `snapshots/`: optional REST snapshots referenced by `events.csv`
+
+## Layout
+
+```
+data/<SYMBOL>/<YYYYMMDD>/
+  orderbook.csv
+  trades.csv
+  events.csv
+  snapshots/
+    snapshot_<event_id>_<tag>.csv
 ```
 
-### Docker (Recommended)
+## Run
 
 ```bash
-docker build -t avellaneda-mm .
-
-docker run --rm \
-  -e CONFIG_PATH=config/config.binance.test.yaml \
-  -v "$PWD/data":/app/data \
-  avellaneda-mm:latest \
-  python -m mm.market_data.recorder
+pip install -r requirements.txt
+SYMBOL=ETHUSDT python -m mm.market_data.recorder
 ```
 
----
+Docker:
 
-## Data Collector Design Rules
+```bash
+docker build -t mm-recorder:latest .
+docker run --rm -e SYMBOL=ETHUSDT -v "$PWD/data":/app/data mm-recorder:latest
+```
 
-- REST snapshot is the initial truth
-- WebSocket diffs are applied sequentially
-- Quantity = 0 removes a price level
-- Sequence gaps trigger resync
-- Exchange timestamps are authoritative
+## Backtesting inputs
 
----
-
-## Status
-
-This project is **research‑first**.
-No capital is deployed until:
-- data is validated
-- backtests are convincing
-- risk is understood
-
----
-
-## References
-
-- Avellaneda & Stoikov (2008)
-- Binance Spot API Docs
-- Cartea, Jaimungal & Penalva – Algorithmic and High‑Frequency Trading
+Load:
+- `orderbook.csv` (filter `epoch_id >= 1`)
+- `trades.csv` (align by `event_time_ms`)
+- `events.csv` (optional: segment by `epoch_id`, diagnose gaps, run boundaries)
