@@ -4,7 +4,8 @@
 
 The goal of the **replay subsystem** is to reconstruct, as faithfully as possible, the same
 market state that your production market maker would have seen, using the data recorded
-by the live recorder.
+by the live recorder (`mm/market_data`). The backtest therefore depends directly on
+the artifacts described in `mm/market_data/README.md`.
 
 This allows you to:
 
@@ -76,6 +77,15 @@ data/
 | trades_ws_*.csv | Trade prints |
 
 Replay uses **snapshots + diffs**, not the derived top-N CSV.
+
+### Dependency on `mm/market_data`
+
+- **Producer → Consumer contract:** folders and filenames must match the recorder output exactly (`data/<SYMBOL>/<YYYYMMDD>/...`). Keep both modules on the same commit so schema changes are synchronized.
+- **Events ledger:** the replay bootstrapper reads `events_*.csv` to determine which snapshot tags to load and how to segment epochs.
+- **Gaps file:** optional but useful when diagnosing why replay could not bridge a day.
+- **Top-N CSVs:** not used for core replay but helpful for quick visualizations; they share the same buffering logic as production.
+
+If you add new recorder outputs (e.g., quote intentions or latency logs), update both READMEs so everyone understands how the data flows between modules.
 
 ---
 

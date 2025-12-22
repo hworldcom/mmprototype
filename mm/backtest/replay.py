@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import heapq
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Iterator, Optional, Tuple
@@ -13,6 +14,8 @@ from mm.market_data.sync_engine import OrderBookSyncEngine
 
 from .io import DepthDiff, Trade, EventRow, find_depth_diffs_file, find_trades_file, find_events_file
 from .io import iter_depth_diffs, iter_trades_csv, iter_events_csv
+
+log = logging.getLogger("backtest.replay")
 
 
 @dataclass
@@ -71,6 +74,37 @@ def load_snapshot_csv(path: Path) -> LocalOrderBook:
     return lob
 
 
+def _validate_book_state(lob: LocalOrderBook, context: str) -> None:
+    """Ensure recent snapshot/resync produced a sane book."""
+    best_bid = max(lob.bids) if lob.bids else None
+    best_ask = min(lob.asks) if lob.asks else None
+
+    if best_bid is None or best_ask is None:
+        log.warning(
+            "Order book missing side after %s: bids=%d asks=%d",
+            context,
+            len(lob.bids),
+            len(lob.asks),
+        )
+        return
+
+    if best_bid >= best_ask:
+        msg = (
+            f"Invalid order book after {context}: "
+            f"best_bid={best_bid} >= best_ask={best_ask}"
+        )
+        log.error(msg)
+        raise AssertionError(msg)
+
+    log.debug(
+        "Validated order book after %s (best_bid=%.8f, best_ask=%.8f, spread=%.8f)",
+        context,
+        best_bid,
+        best_ask,
+        best_ask - best_bid,
+    )
+
+
 def replay_day(
     root: Path,
     symbol: str,
@@ -127,6 +161,7 @@ def replay_day(
                     _, p_str = info
                     lob = load_snapshot_csv(Path(p_str))
                     engine.adopt_snapshot(lob)
+                    _validate_book_state(engine.lob, context=f"snapshot {Path(p_str).name}")
                     stats.snapshots_loaded += 1
             push_next(event_it, "event")
 
@@ -140,6 +175,7 @@ def replay_day(
                 stats.gaps += 1
             elif result.action == "synced":
                 stats.synced += 1
+                _validate_book_state(engine.lob, context=f"resync recv_ms={recv_ms}")
             elif result.action == "applied":
                 stats.applied += 1
 

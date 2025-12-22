@@ -33,7 +33,48 @@ To correctly test an Avellaneda–Stoikov‑style strategy we need:
 
 ---
 
+## Repository Skeleton
+
+```
+.
+├── README.md
+├── requirements.txt
+├── Dockerfile / Makefile
+├── data/                  # Recorder output (per symbol/day). Shared with backtests.
+├── mm/
+│   ├── market_data/
+│   │   ├── README.md
+│   │   ├── recorder.py
+│   │   ├── sync_engine.py
+│   │   ├── local_orderbook.py
+│   │   ├── buffered_writer.py
+│   │   ├── ws_stream.py
+│   │   └── snapshot.py
+│   └── backtest/
+│       ├── README.md
+│       ├── replay.py
+│       ├── paper_exchange.py
+│       ├── io.py
+│       ├── fills/
+│       └── quotes/
+├── tests/                 # Recorder and sync-engine unit tests
+└── logs/, restore/, etc.  # Environment-specific artifacts
+```
+
+`mm/market_data` is the producer of historical datasets; `mm/backtest` consumes them for deterministic replay. Both subtrees have their own README files referenced below.
+
+---
+
 ## Current State (Implemented)
+
+### Repository Structure
+
+| Path | Purpose | Key dependency |
+|------|---------|----------------|
+| `mm/market_data/` | Real-time recorder that captures Binance Spot depth/trade streams, reconstructs the local order book, and writes CSV / NDJSON artifacts plus an events ledger. | Consumed by `mm/backtest`, documented in `mm/market_data/README.md`. |
+| `mm/backtest/` | Offline replay, paper exchange, and fill-model experiments that operate on recorded data. | Requires recorder outputs (same folder layout) at runtime; documented in `mm/backtest/README.md`. |
+
+These subtrees now ship with their own READMEs for day-to-day usage, whereas this root README stays focused on the overarching goals and roadmap.
 
 ### Market Data Collection
 
@@ -55,9 +96,12 @@ To correctly test an Avellaneda–Stoikov‑style strategy we need:
 
 Per symbol, per day:
 
-- `orderbook_rest_snapshot_<SYMBOL>_<YYYYMMDD>.csv`
+- `snapshots/snapshot_<event_id>_<tag>.csv`
 - `orderbook_ws_depth_<SYMBOL>_<YYYYMMDD>.csv`
 - `trades_ws_<SYMBOL>_<YYYYMMDD>.csv`
+- `events_<SYMBOL>_<YYYYMMDD>.csv`
+- `gaps_<SYMBOL>_<YYYYMMDD>.csv` (optional, for diagnostics)
+- `diffs/depth_diffs_<SYMBOL>_<YYYYMMDD>.ndjson.gz` (optional raw WS diffs)
 
 All numeric values are stored in **human‑readable fixed decimals**.
 
@@ -101,22 +145,36 @@ All numeric values are stored in **human‑readable fixed decimals**.
 
 # Binance Market Data Recorder (Depth + Trades + Events Ledger)
 
-One process per symbol. Produces three primary files per day:
+One process per symbol. Produces the following per day:
 
-- `orderbook.csv`: top-10 bids/asks frames (only when book is synced)
-- `trades.csv`: trade prints
-- `events.csv`: authoritative ledger for run boundaries and sync/resync epochs
-- `snapshots/`: optional REST snapshots referenced by `events.csv`
+- `orderbook_ws_depth_<SYMBOL>_<YYYYMMDD>.csv`: top-N bids/asks frames (only when book is synced)
+- `trades_ws_<SYMBOL>_<YYYYMMDD>.csv`: trade prints with recv timestamps
+- `events_<SYMBOL>_<YYYYMMDD>.csv`: authoritative ledger for run boundaries and sync/resync epochs
+- `gaps_<SYMBOL>_<YYYYMMDD>.csv`: optional stream of gap/resync diagnostics
+- `snapshots/snapshot_<event_id>_<tag>.csv`: REST snapshots referenced by `events.csv`
+- `diffs/depth_diffs_<SYMBOL>_<YYYYMMDD>.ndjson.gz`: optional gzip’d raw WS diffs for exact replay
 
 ## Layout
 
 ```
 data/<SYMBOL>/<YYYYMMDD>/
-  orderbook.csv
-  trades.csv
-  events.csv
+  orderbook_ws_depth_<SYMBOL>_<YYYYMMDD>.csv
+  trades_ws_<SYMBOL>_<YYYYMMDD>.csv
+  events_<SYMBOL>_<YYYYMMDD>.csv
+  gaps_<SYMBOL>_<YYYYMMDD>.csv
   snapshots/
     snapshot_<event_id>_<tag>.csv
+  diffs/
+    depth_diffs_<SYMBOL>_<YYYYMMDD>.ndjson.gz
+
+### File descriptions
+
+- `orderbook_ws_depth_<SYMBOL>_<YYYYMMDD>.csv` — book frames (timestamps, run/epoch ids, top-N ladders).
+- `trades_ws_<SYMBOL>_<YYYYMMDD>.csv` — WebSocket trades with event/recv timestamps, run id, price, quantity, aggressor flag.
+- `events_<SYMBOL>_<YYYYMMDD>.csv` — lifecycle ledger documenting run start/stop, snapshot requests, loads, resyncs, and window boundaries.
+- `gaps_<SYMBOL>_<YYYYMMDD>.csv` — optional diagnostics for gap detection, including timestamps and free-form details.
+- `snapshots/` — tagged CSV snapshots keyed by run/event id, referenced by `events.csv`.
+- `diffs/` — gzipped NDJSON stream of raw depth diffs for exact replay alignment.
 ```
 
 ## Run
@@ -136,6 +194,15 @@ docker run --rm -e SYMBOL=ETHUSDT -v "$PWD/data":/app/data mm-recorder:latest
 ## Backtesting inputs
 
 Load:
-- `orderbook.csv` (filter `epoch_id >= 1`)
-- `trades.csv` (align by `event_time_ms`)
-- `events.csv` (optional: segment by `epoch_id`, diagnose gaps, run boundaries)
+- `orderbook_ws_depth_<SYMBOL>_<YYYYMMDD>.csv` (filter `epoch_id >= 1`)
+- `trades_ws_<SYMBOL>_<YYYYMMDD>.csv` (align by `event_time_ms`)
+- `events_<SYMBOL>_<YYYYMMDD>.csv` (optional: segment by `epoch_id`, diagnose gaps, run boundaries)
+
+---
+
+## Folder READMEs
+
+- `mm/market_data/README.md` — recorder configuration, environment variables, data layout, and how to orchestrate daily runs. Emphasizes the contract consumed by backtests.
+- `mm/backtest/README.md` — describes the replay engines, how to point them at recorded datasets, and how to extend fill models or paper exchanges.
+
+The recorder is the producer and the backtest is the consumer. Keep their shared `data/<SYMBOL>/<YYYYMMDD>/` structure intact so you can freely move sessions between live capture boxes and research machines.*** End Patch
