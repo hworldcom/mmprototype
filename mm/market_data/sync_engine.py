@@ -50,13 +50,16 @@ class OrderBookSyncEngine:
 
         lu = int(self.lob.last_update_id)
 
-        self.buffer.sort(key=lambda ev: int(ev.get("u", 0)))
+        # Sort by starting update id so we reason about the earliest possible bridge correctly.
+        self.buffer.sort(key=lambda ev: int(ev.get("U", 0)))
 
         # If the earliest buffered event starts after lu+1, bridging is impossible for this snapshot.
         if self.buffer:
             min_U = int(self.buffer[0].get("U", 0))
             if min_U > lu + 1:
                 return SyncResult("gap", f"bridge_impossible min_U={min_U} lastUpdateId={lu}")
+
+        bridged = False
 
         for ev in list(self.buffer):
             U, u = int(ev["U"]), int(ev["u"])
@@ -65,14 +68,31 @@ class OrderBookSyncEngine:
                 self.buffer.remove(ev)
                 continue
 
-            bridges = (U <= lu <= u) or (U <= lu + 1 <= u)
-            if bridges:
+            if not self.depth_synced:
+                bridges = (U <= lu <= u) or (U <= lu + 1 <= u)
+                if not bridges:
+                    continue
+
                 ok = self.lob.apply_diff(U, u, ev.get("b", []), ev.get("a", []))
-                if ok:
-                    self.depth_synced = True
-                    self.buffer.remove(ev)
-                    return SyncResult("synced", f"lastUpdateId={self.lob.last_update_id} bridge U={U} u={u}")
-                return SyncResult("gap", f"bridge_apply_failed U={U} u={u} lastUpdateId={lu}")
+                if not ok:
+                    return SyncResult("gap", f"bridge_apply_failed U={U} u={u} lastUpdateId={lu}")
+
+                self.depth_synced = True
+                bridged = True
+                lu = int(self.lob.last_update_id)
+                self.buffer.remove(ev)
+                continue
+
+            ok = self.lob.apply_diff(U, u, ev.get("b", []), ev.get("a", []))
+            if not ok:
+                return SyncResult("gap", f"gap U={U} u={u} last={self.lob.last_update_id}")
+
+            lu = int(self.lob.last_update_id)
+            self.buffer.remove(ev)
+
+        if self.depth_synced:
+            action = "synced" if bridged else "applied"
+            return SyncResult(action, f"lastUpdateId={self.lob.last_update_id}")
 
         return SyncResult("buffered", "not_synced")
 

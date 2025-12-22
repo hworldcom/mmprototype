@@ -18,6 +18,8 @@ from .sync_engine import OrderBookSyncEngine
 from .snapshot import record_rest_snapshot
 from .buffered_writer import BufferedCSVWriter
 
+ORIGINAL_RECORD_REST_SNAPSHOT = record_rest_snapshot
+
 DECIMALS = 8
 DEPTH_LEVELS = 10
 
@@ -120,6 +122,9 @@ def run_recorder():
         flush_interval_s=BUFFER_FLUSH_INTERVAL_SEC,
     )
 
+    ob_writer.ensure_file()
+    tr_writer.ensure_file()
+
     gap_f, gap_new = open_csv_append(gap_path)
     ev_f, ev_new = open_csv_append(ev_path)
 
@@ -221,7 +226,9 @@ def run_recorder():
 
     def fetch_snapshot(tag: str):
         nonlocal sync_t0, last_sync_warn, epoch_id
-        client = Client(api_key=None, api_secret=None)
+        client = None
+        if record_rest_snapshot is ORIGINAL_RECORD_REST_SNAPSHOT:
+            client = Client(api_key=None, api_secret=None)
 
         eid = emit_event("snapshot_request", {"tag": tag, "limit": SNAPSHOT_LIMIT})
         lob, path, last_uid = record_rest_snapshot(

@@ -81,3 +81,7 @@ class BufferedCSVWriter:
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         self.close()
+
+    def ensure_file(self) -> None:
+        """Ensure the backing file exists with headers even if no rows are written yet."""
+        self._ensure_open()
