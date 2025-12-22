@@ -16,6 +16,7 @@ from mm.logging_config import setup_logging
 from .ws_stream import BinanceWSStream
 from .sync_engine import OrderBookSyncEngine
 from .snapshot import record_rest_snapshot
+from .buffered_writer import BufferedCSVWriter
 
 DECIMALS = 8
 DEPTH_LEVELS = 10
@@ -24,6 +25,9 @@ HEARTBEAT_SEC = 30
 SYNC_WARN_AFTER_SEC = 10
 MAX_BUFFER_WARN = 5000
 SNAPSHOT_LIMIT = 1000
+ORDERBOOK_BUFFER_ROWS = 500
+TRADES_BUFFER_ROWS = 1000
+BUFFER_FLUSH_INTERVAL_SEC = 1.0
 
 # If True, write raw WS depth diffs for production-faithful replay
 STORE_DEPTH_DIFFS = True
@@ -91,30 +95,36 @@ def run_recorder():
         is_new = (not existed) or (path.stat().st_size == 0)
         return f, is_new
 
-    ob_f, ob_new = open_csv_append(ob_path)
-    tr_f, tr_new = open_csv_append(tr_path)
+    ob_header = (
+        ["event_time_ms", "recv_time_ms", "run_id", "epoch_id"]
+        + sum(
+            [
+                [f"bid{i}_price", f"bid{i}_qty", f"ask{i}_price", f"ask{i}_qty"]
+                for i in range(1, DEPTH_LEVELS + 1)
+            ],
+            [],
+        )
+    )
+    tr_header = ["event_time_ms", "recv_time_ms", "run_id", "price", "qty", "is_buyer_maker"]
+
+    ob_writer = BufferedCSVWriter(
+        ob_path,
+        header=ob_header,
+        flush_rows=ORDERBOOK_BUFFER_ROWS,
+        flush_interval_s=BUFFER_FLUSH_INTERVAL_SEC,
+    )
+    tr_writer = BufferedCSVWriter(
+        tr_path,
+        header=tr_header,
+        flush_rows=TRADES_BUFFER_ROWS,
+        flush_interval_s=BUFFER_FLUSH_INTERVAL_SEC,
+    )
+
     gap_f, gap_new = open_csv_append(gap_path)
     ev_f, ev_new = open_csv_append(ev_path)
 
-    ob_w = csv.writer(ob_f)
-    tr_w = csv.writer(tr_f)
     gap_w = csv.writer(gap_f)
     ev_w = csv.writer(ev_f)
-
-    if ob_new:
-        ob_w.writerow(
-            ["event_time_ms", "recv_time_ms", "run_id", "epoch_id"]
-            + sum(
-                [[f"bid{i}_price", f"bid{i}_qty", f"ask{i}_price", f"ask{i}_qty"]
-                for i in range(1, DEPTH_LEVELS + 1)],
-                [],
-            )
-        )
-        ob_f.flush()
-
-    if tr_new:
-        tr_w.writerow(["event_time_ms", "recv_time_ms", "run_id", "price", "qty", "is_buyer_maker"])
-        tr_f.flush()
 
     if gap_new:
         gap_w.writerow(["recv_time_ms", "run_id", "epoch_id", "event", "details"])
@@ -274,8 +284,7 @@ def run_recorder():
                 f"{aq:.{DECIMALS}f}",
             ]
 
-        ob_w.writerow(row)
-        ob_f.flush()
+        ob_writer.write_row(row)
         ob_rows_written += 1
 
     def on_open():
@@ -345,7 +354,7 @@ def run_recorder():
         last_trade_event_ms = int(data.get("E", 0))
 
         try:
-            tr_w.writerow(
+            tr_writer.write_row(
                 [
                     int(data.get("E", 0)),
                     recv_ms,
@@ -355,7 +364,6 @@ def run_recorder():
                     int(data["m"]),
                 ]
             )
-            tr_f.flush()
             tr_rows_written += 1
         except Exception:
             log.exception("Unhandled exception in on_trade (message=%s)", data)
@@ -387,9 +395,15 @@ def run_recorder():
         # heartbeat can still run after this (it only logs)
         heartbeat(force=True)
 
-        for f in (ob_f, tr_f, gap_f, ev_f):
+        for f in (gap_f, ev_f):
             try:
                 f.close()
+            except Exception:
+                pass
+
+        for writer in (ob_writer, tr_writer):
+            try:
+                writer.close()
             except Exception:
                 pass
 
