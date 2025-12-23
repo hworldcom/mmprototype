@@ -19,6 +19,38 @@ The replay pipeline mirrors the **production data flow**, not a simplified snaps
 
 ---
 
+## Folder Structure
+
+```
+mm/backtest/
+├── README.md                # This document
+├── replay.py                # Day-level orchestrator & stats
+├── io.py                    # File discovery + CSV/NDJSON iterators
+├── paper_exchange.py        # Paper fills & balance tracking
+├── fills/
+│   ├── __init__.py
+│   ├── base.py
+│   ├── poisson.py
+│   ├── trade_driven.py
+│   └── hybrid.py
+├── quotes/
+│   ├── __init__.py
+│   ├── base.py
+│   ├── avellaneda_stoikov.py
+│   ├── hybrid.py
+│   ├── inventory_skew.py
+│   └── microstructure.py
+├── __init__.py
+└── __pycache__/             # Generated
+```
+
+`replay.py` consumes the recorder outputs and feeds them through the same `OrderBookSyncEngine`
+used in production. `io.py` is the shared bridge to disk, keeping the producer→consumer contract
+in one place. The `fills/` and `quotes/` subpackages stay intentionally lightweight so their
+components can be reused in notebooks or additional runners.
+
+---
+
 ## High-level Architecture
 
 ```
