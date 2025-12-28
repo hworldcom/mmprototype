@@ -9,3 +9,4 @@ data/
 logs/
 git
 restore
+out_backtest/
