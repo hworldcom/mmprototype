@@ -6,7 +6,7 @@ from typing import List, Optional, Protocol
 
 @dataclass(frozen=True)
 class Quote:
-    side: str          # "BUY" or "SELL"
+    side: str          # "BUY" | "SELL"
     price: float
     qty: float
     ttl_ms: int = 1000
@@ -19,13 +19,13 @@ class MarketState:
     best_bid: float
     best_ask: float
     spread: float
-    imbalance: Optional[float] = None
+    imbalance: Optional[float] = None  # [-1, 1] where positive means bid-heavy (optional)
 
 
 @dataclass(frozen=True)
 class PositionState:
-    inventory: float
-    cash: float
+    inventory: float   # base asset units
+    cash: float        # quote currency units
 
 
 class QuoteModel(Protocol):

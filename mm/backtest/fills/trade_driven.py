@@ -9,6 +9,7 @@ from .base import FillModel, OpenOrder, Fill
 @dataclass
 class TradeDrivenFillModel(FillModel):
     allow_partial: bool = True
+    max_fill_qty: float = 1e18
 
     def on_trade(self, trade_recv_ms: int, trade_price: float, trade_qty: float, is_buyer_maker: int,
                  open_orders: List[OpenOrder]) -> List[Fill]:
@@ -31,12 +32,12 @@ class TradeDrivenFillModel(FillModel):
                 continue
 
             if o.side == "BUY" and sell_aggressor and trade_price <= o.price:
-                qty = min(o.qty, remaining) if self.allow_partial else o.qty
+                qty = min(o.qty, remaining, self.max_fill_qty) if self.allow_partial else min(o.qty, self.max_fill_qty)
                 fills.append(Fill(o.order_id, trade_recv_ms, o.price, qty, "trade_cross"))
                 remaining -= qty
 
             elif o.side == "SELL" and buy_aggressor and trade_price >= o.price:
-                qty = min(o.qty, remaining) if self.allow_partial else o.qty
+                qty = min(o.qty, remaining, self.max_fill_qty) if self.allow_partial else min(o.qty, self.max_fill_qty)
                 fills.append(Fill(o.order_id, trade_recv_ms, o.price, qty, "trade_cross"))
                 remaining -= qty
 
