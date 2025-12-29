@@ -228,12 +228,11 @@ class PaperExchange:
         ok, reason = self._can_place(side, px, qty)
         active_ms = recv_ms + int(self.cfg.order_latency_ms)
         # Exchange expiry: default to GTC unless an explicit TTL is configured.
-        ttl_ms = self.cfg.order_ttl_ms
+        ttl_ms: Optional[int] = q.ttl_ms
         if ttl_ms is None:
-            ttl_ms = q.ttl_ms  # may be None
-
-        expire_ms = None
-        if ttl_ms is not None and ttl_ms > 0:
+            ttl_ms = self.cfg.order_ttl_ms
+        expire_ms: Optional[int] = None
+        if ttl_ms is not None and int(ttl_ms) > 0:
             expire_ms = active_ms + int(ttl_ms)
 
         oo = OpenOrder(
@@ -323,10 +322,22 @@ class PaperExchange:
         self._log_order(fill.recv_ms, fill.order_id, "FILL", st)
 
         if st.remaining_qty <= 1e-12:
-            # Terminal
-            self.open_orders.pop(fill.order_id, None)
-            # Log terminal state row
+            # Terminal: mark the order as FILLED for logging, then remove from the book.
+            oo_filled = OpenOrder(
+                order_id=oo.order_id,
+                side=oo.side,
+                price=oo.price,
+                qty=oo.qty,
+                placed_recv_ms=oo.placed_recv_ms,
+                active_recv_ms=oo.active_recv_ms,
+                expire_recv_ms=oo.expire_recv_ms,
+                cancel_req_ms=oo.cancel_req_ms,
+                cancel_effective_ms=oo.cancel_effective_ms,
+                status="FILLED",
+            )
+            st.oo = oo_filled
             self._log_order(fill.recv_ms, fill.order_id, "CLOSE_FILLED", st)
+            self.open_orders.pop(fill.order_id, None)
 
     # ---------------------------
     # Tick/trade handlers
