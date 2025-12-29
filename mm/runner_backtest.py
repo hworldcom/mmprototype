@@ -17,6 +17,18 @@ def _env_int(key: str, default: int) -> int:
     return int(v) if v else default
 
 
+def _env_opt_int(key: str):
+    """Parse an optional int from env.
+
+    Returns None if unset or set to 0.
+    """
+    v = os.getenv(key, "")
+    if not v:
+        return None
+    iv = int(v)
+    return None if iv == 0 else iv
+
+
 def _env_json(key: str) -> dict:
     v = os.getenv(key, "")
     if not v:
@@ -43,7 +55,10 @@ def main():
     order_latency_ms = _env_int("ORDER_LATENCY_MS", 50)
     cancel_latency_ms = _env_int("CANCEL_LATENCY_MS", 25)
     requote_interval_ms = _env_int("REQUOTE_INTERVAL_MS", 250)
-    order_ttl_ms = _env_int("ORDER_TTL_MS", 1000)
+    # ORDER_TTL_MS: 0 or unset => treat as GTC
+    order_ttl_ms = _env_opt_int("ORDER_TTL_MS")
+    # REFRESH_INTERVAL_MS: 0 or unset => no refresh of unchanged quotes
+    refresh_interval_ms = _env_opt_int("REFRESH_INTERVAL_MS")
 
     tick_size = _env_float("TICK_SIZE", 0.01)
     qty_step = _env_float("QTY_STEP", 0.0)
@@ -68,6 +83,7 @@ def main():
         cancel_latency_ms=cancel_latency_ms,
         requote_interval_ms=requote_interval_ms,
         order_ttl_ms=order_ttl_ms,
+        refresh_interval_ms=refresh_interval_ms,
         tick_size=tick_size,
         qty_step=qty_step,
         min_notional=min_notional,

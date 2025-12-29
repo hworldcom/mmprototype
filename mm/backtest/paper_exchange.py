@@ -22,7 +22,13 @@ class BacktestConfig:
 
     # Quoting cadence / lifetime
     quote_interval_ms: int = 250
-    order_ttl_ms: int = 1000
+    # If None or 0: treat orders as Good-Till-Cancel (no exchange expiry).
+    order_ttl_ms: Optional[int] = None
+
+    # Optional internal refresh policy (independent of quote interval).
+    # If set (ms), an unchanged resting order will be cancelled/replaced once its
+    # age exceeds this interval. If None/0, unchanged orders are kept.
+    refresh_interval_ms: Optional[int] = None
 
     # Market constraints
     tick_size: float = 0.01
@@ -75,6 +81,7 @@ class _OrderState:
     oo: OpenOrder
     remaining_qty: float
     reject_reason: str = ""
+    cancel_reason: str = ""
 
 
 class PaperExchange:
@@ -119,6 +126,7 @@ class PaperExchange:
             "active_recv_ms", "expire_recv_ms",
             "cancel_req_ms", "cancel_effective_ms",
             "reject_reason",
+            "cancel_reason",
         ])
 
     def close(self):
@@ -151,6 +159,7 @@ class PaperExchange:
             oo.cancel_req_ms if oo.cancel_req_ms is not None else "",
             oo.cancel_effective_ms if oo.cancel_effective_ms is not None else "",
             st.reject_reason,
+            st.cancel_reason,
         ])
         self._orders_f.flush()
 
@@ -218,7 +227,13 @@ class PaperExchange:
 
         ok, reason = self._can_place(side, px, qty)
         active_ms = recv_ms + int(self.cfg.order_latency_ms)
-        expire_ms = active_ms + int(q.ttl_ms if q.ttl_ms is not None else self.cfg.order_ttl_ms)
+        # Exchange expiry: default to GTC unless an explicit TTL is configured.
+        ttl_ms: Optional[int] = q.ttl_ms
+        if ttl_ms is None:
+            ttl_ms = self.cfg.order_ttl_ms
+        expire_ms: Optional[int] = None
+        if ttl_ms is not None and int(ttl_ms) > 0:
+            expire_ms = active_ms + int(ttl_ms)
 
         oo = OpenOrder(
             order_id=oid,
@@ -233,7 +248,12 @@ class PaperExchange:
             status="OPEN" if ok else "REJECTED",
         )
 
-        st = _OrderState(oo=oo, remaining_qty=(qty if ok else 0.0), reject_reason=reason if not ok else "")
+        st = _OrderState(
+            oo=oo,
+            remaining_qty=(qty if ok else 0.0),
+            reject_reason=reason if not ok else "",
+            cancel_reason="",
+        )
         # Log the placement attempt regardless.
         self._log_order(recv_ms, oid, "PLACE", st)
 
@@ -243,7 +263,7 @@ class PaperExchange:
 
         self.open_orders[oid] = st
 
-    def cancel_order(self, recv_ms: int, order_id: str):
+    def cancel_order(self, recv_ms: int, order_id: str, cancel_reason: str = ""):
         st = self.open_orders.get(order_id)
         if st is None:
             return
@@ -264,11 +284,12 @@ class PaperExchange:
             status="CANCEL_PENDING",
         )
         st.oo = new_oo
+        st.cancel_reason = cancel_reason
         self._log_order(recv_ms, order_id, "CANCEL_REQ", st)
 
-    def cancel_all(self, recv_ms: int):
+    def cancel_all(self, recv_ms: int, cancel_reason: str = ""):
         for oid in list(self.open_orders.keys()):
-            self.cancel_order(recv_ms, oid)
+            self.cancel_order(recv_ms, oid, cancel_reason=cancel_reason)
 
     # ---------------------------
     # Fill application
@@ -320,10 +341,8 @@ class PaperExchange:
         quotes = self.quote_model.generate_quotes(market, self.position())
         desired_by_side: Dict[str, Quote] = {}
         for q in quotes:
-            qq = q
-            if qq.ttl_ms is None:
-                qq = Quote(side=qq.side, price=qq.price, qty=qq.qty, ttl_ms=self.cfg.order_ttl_ms)
-            desired_by_side[qq.side.upper()] = qq  # one per side (latest wins)
+            # Keep ttl_ms as-is; if None, we will treat it as GTC unless cfg.order_ttl_ms is set.
+            desired_by_side[q.side.upper()] = q  # one per side (latest wins)
 
         # 2) Compare against current open orders and only cancel/replace if something changed.
         #    This prevents pathological churn (cancel same order, place same order).
@@ -356,12 +375,17 @@ class PaperExchange:
                 dpx = round_price_for_side(float(dq.price), self.cfg.tick_size, side)
                 dqty = round_qty(float(dq.qty), self.cfg.qty_step)
 
-                exp_ok = True
-                if ex.oo.expire_recv_ms is not None:
-                    # Keep only if it will survive until (at least) the next requote + cancel latency
-                    exp_ok = (ex.oo.expire_recv_ms - now) >= (int(self.cfg.quote_interval_ms) + int(self.cfg.cancel_latency_ms))
+                same_quote = (abs(ex.oo.price - dpx) < 1e-12 and abs(ex.remaining_qty - dqty) < 1e-12)
 
-                if exp_ok and abs(ex.oo.price - dpx) < 1e-12 and abs(ex.remaining_qty - dqty) < 1e-12:
+                # Optional refresh policy (independent of quote interval).
+                refresh_ms = self.cfg.refresh_interval_ms
+                needs_refresh = False
+                if refresh_ms is not None and int(refresh_ms) > 0:
+                    # Use active_recv_ms as "age" anchor: when the order becomes live.
+                    age = max(0, now - int(ex.oo.active_recv_ms))
+                    needs_refresh = age >= int(refresh_ms)
+
+                if same_quote and not needs_refresh:
                     keep_sides.add(side)
 
         # 3) Cancel only sides that need to change
@@ -371,7 +395,20 @@ class PaperExchange:
             if st.oo.side.upper() in keep_sides:
                 continue
             # Send cancel request; order remains fill-eligible until cancel ack.
-            self.cancel_order(now, oid)
+            # Determine cancel reason.
+            side = st.oo.side.upper()
+            if side in desired_by_side:
+                dq = desired_by_side[side]
+                dpx = round_price_for_side(float(dq.price), self.cfg.tick_size, side)
+                dqty = round_qty(float(dq.qty), self.cfg.qty_step)
+                same_quote = (abs(st.oo.price - dpx) < 1e-12 and abs(st.remaining_qty - dqty) < 1e-12)
+                if same_quote:
+                    reason = "REFRESH"
+                else:
+                    reason = "QUOTE_CHANGE"
+            else:
+                reason = "NO_DESIRED_QUOTE"
+            self.cancel_order(now, oid, cancel_reason=reason)
 
         # 4) Place quotes (optionally suppressing unfunded sides)
         for side, dq in desired_by_side.items():
@@ -387,7 +424,13 @@ class PaperExchange:
                 # Do not attempt placement; log a SKIP for traceability and to avoid spammy REJECT rows.
                 oid = str(uuid.uuid4())
                 active_ms = now + int(self.cfg.order_latency_ms)
-                expire_ms = active_ms + int(dq.ttl_ms if dq.ttl_ms is not None else self.cfg.order_ttl_ms)
+                # SKIP pseudo-order: include expiry only if TTL configured.
+                ttl_ms: Optional[int] = dq.ttl_ms
+                if ttl_ms is None:
+                    ttl_ms = self.cfg.order_ttl_ms
+                expire_ms: Optional[int] = None
+                if ttl_ms is not None and int(ttl_ms) > 0:
+                    expire_ms = active_ms + int(ttl_ms)
                 oo = OpenOrder(
                     order_id=oid,
                     side=side,
@@ -400,7 +443,7 @@ class PaperExchange:
                     cancel_effective_ms=None,
                     status="SKIPPED",
                 )
-                st = _OrderState(oo=oo, remaining_qty=0.0, reject_reason=reason)
+                st = _OrderState(oo=oo, remaining_qty=0.0, reject_reason=reason, cancel_reason="")
                 self._log_order(now, oid, "SKIP", st)
                 continue
 
@@ -415,6 +458,7 @@ class PaperExchange:
             oo = st.oo
             if oo.expire_recv_ms is not None and now_ms >= oo.expire_recv_ms:
                 st.oo = replace(st.oo, status="EXPIRED")
+                st.cancel_reason = "TTL_EXPIRE"
                 self._log_order(now_ms, oid, "EXPIRE", st)
                 self.open_orders.pop(oid, None)
 

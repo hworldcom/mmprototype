@@ -165,7 +165,10 @@ def backtest_day(
     order_latency_ms: int = 50,
     cancel_latency_ms: int = 25,
     requote_interval_ms: int = 250,
-    order_ttl_ms: int = 1000,
+    # If None/0: treat orders as Good-Till-Cancel (no expiry).
+    order_ttl_ms: Optional[int] = None,
+    # If None/0: do not refresh unchanged quotes.
+    refresh_interval_ms: Optional[int] = None,
     tick_size: float = 0.01,
     qty_step: float = 0.0,
     min_notional: float = 0.0,
@@ -185,6 +188,7 @@ def backtest_day(
         cancel_latency_ms=cancel_latency_ms,
         quote_interval_ms=requote_interval_ms,
         order_ttl_ms=order_ttl_ms,
+        refresh_interval_ms=refresh_interval_ms,
         tick_size=tick_size,
         qty_step=qty_step,
         min_notional=min_notional,
