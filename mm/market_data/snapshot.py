@@ -1,12 +1,16 @@
 import csv
 from pathlib import Path
-from binance.client import Client
+
+try:
+    from binance.client import Client  # type: ignore
+except Exception:  # pragma: no cover
+    Client = None  # type: ignore
 
 from .local_orderbook import LocalOrderBook
 
 
 def record_rest_snapshot(
-    client: Client,
+    client,
     symbol: str,
     day_dir: Path,
     snapshots_dir: Path,
@@ -20,6 +24,14 @@ def record_rest_snapshot(
 
     Snapshot path naming is event-driven so multiple snapshots per day (resyncs) do not overwrite.
     """
+    if Client is None:
+        raise RuntimeError(
+            "python-binance is required to fetch REST snapshots. "
+            "Install dependencies from requirements.txt (pip install -r requirements.txt)."
+        )
+    if client is None:
+        raise RuntimeError("Binance REST client is None.")
+
     snap = client.get_order_book(symbol=symbol, limit=limit)
     last_update_id = int(snap["lastUpdateId"])
 

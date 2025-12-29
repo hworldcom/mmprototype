@@ -10,7 +10,16 @@ from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from binance.client import Client
+"""Market data recorder.
+
+Note: The project supports running unit tests in minimal environments where
+`python-binance` may not be installed. We therefore import it lazily.
+"""
+
+try:
+    from binance.client import Client  # type: ignore
+except Exception:  # pragma: no cover
+    Client = None  # type: ignore
 
 from mm.logging_config import setup_logging
 from .ws_stream import BinanceWSStream
@@ -228,6 +237,11 @@ def run_recorder():
         nonlocal sync_t0, last_sync_warn, epoch_id
         client = None
         if record_rest_snapshot is ORIGINAL_RECORD_REST_SNAPSHOT:
+            if Client is None:
+                raise RuntimeError(
+                    "python-binance is required to fetch REST snapshots. "
+                    "Install dependencies from requirements.txt (pip install -r requirements.txt)."
+                )
             client = Client(api_key=None, api_secret=None)
 
         eid = emit_event("snapshot_request", {"tag": tag, "limit": SNAPSHOT_LIMIT})

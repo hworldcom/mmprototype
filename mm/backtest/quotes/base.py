@@ -9,7 +9,9 @@ class Quote:
     side: str          # "BUY" | "SELL"
     price: float
     qty: float
-    ttl_ms: Optional[int] = None  # None => no expiry unless configured globally
+    # If None: the quote does not impose an expiry and the exchange will treat
+    # it as Good-Till-Cancel unless BacktestConfig.order_ttl_ms is set.
+    ttl_ms: Optional[int] = None
 
 
 @dataclass(frozen=True)

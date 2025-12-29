@@ -152,7 +152,9 @@ on_trade(trade, engine)
 ```bash
 export SYMBOL=BTCUSDT
 export DAY=20251216
-python -m mm.runner_backtest_replay
+
+# Paper-exchange backtest (quotes + fills)
+python -m mm.runner_backtest
 ```
 
 ---
@@ -167,6 +169,57 @@ python -m mm.runner_backtest_replay
 
 ## Next Steps
 
-- PaperTrader
-- Fill models A / B / C
-- Parameter calibration
+### Outputs
+
+The runner writes one set of CSVs per symbol into `OUT_DIR` (default: `out_backtest/`):
+
+- `orders_<SYMBOL>.csv` — order lifecycle log (PLACE/CANCEL_REQ/CANCEL_ACK/FILL/CLOSE_FILLED/EXPIRE)
+- `fills_<SYMBOL>.csv` — individual fill events with fees
+- `state_<SYMBOL>.csv` — inventory/cash/mtm snapshots and number of open orders
+
+### Environment variables
+
+Required:
+- `DAY=YYYYMMDD`
+
+Common:
+- `DATA_ROOT` (default: `data`)
+- `OUT_DIR` (default: `out_backtest`)
+- `SYMBOL` (default: `BTCUSDT`)
+
+Quoting:
+- `QUOTE_MODEL` (default: `avellaneda_stoikov`)
+- `QUOTE_QTY` (default: `0.001`)
+- `QUOTE_PARAMS_JSON` (default: `{}`)
+
+Fills:
+- `FILL_MODEL` (default: `trade_driven`)
+- `FILL_PARAMS_JSON` (default: `{}`)
+- `MAKER_FEE_RATE` (default: `0.001`)
+
+Realism:
+- `ORDER_LATENCY_MS` (default: `50`)
+- `CANCEL_LATENCY_MS` (default: `25`)
+- `REQUOTE_INTERVAL_MS` (default: `250`)
+- `ORDER_TTL_MS` (unset/0 => Good-Till-Cancel)
+- `REFRESH_INTERVAL_MS` (unset/0 => keep unchanged orders)
+
+Constraints / balances:
+- `TICK_SIZE` (default: `0.01`)
+- `QTY_STEP` (default: `0.0`)
+- `MIN_NOTIONAL` (default: `0.0`)
+- `INITIAL_CASH` (default: `0.0`)
+- `INITIAL_INVENTORY` (default: `0.0`)
+
+### TTL vs GTC
+
+Crypto spot limit orders are typically *Good-Till-Cancel* by default. In this project:
+
+- If `ORDER_TTL_MS` is unset (or `0`), the exchange simulator treats orders as GTC.
+- A quote may optionally include `Quote.ttl_ms` to enforce a shorter lifetime for that specific quote.
+
+### Next steps
+
+- Parameter calibration notebooks (volatility, intensity, adverse selection)
+- Exchange-specific constraints (min qty/step size per symbol)
+- Additional fill models (price-cross / queue-position)

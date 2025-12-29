@@ -119,15 +119,15 @@ All numeric values are stored in **human‑readable fixed decimals**.
 - [ ] Data validation
 
 ### Phase 2 — Backtesting Engine
-- [ ] Order book replay
-- [ ] Trade replay
-- [ ] Time‑aligned simulation
+- [x] Order book replay (snapshot + WS diffs)
+- [x] Trade replay (trade stream)
+- [x] Time‑aligned simulation (recv_ms merge)
 
 ### Phase 3 — Fill Models
-- [ ] Poisson (Avellaneda–Stoikov)
-- [ ] Price‑cross
-- [ ] Hybrid
-- [ ] Trade‑driven
+- [x] Trade‑driven (trade_cross)
+- [x] Poisson (Avellaneda–Stoikov)
+- [x] Hybrid
+- [ ] Price‑cross (L1/L2 cross-based)
 
 ### Phase 4 — Strategy Research
 - [ ] Quoting logic
@@ -205,4 +205,29 @@ Load:
 - `mm/market_data/README.md` — recorder configuration, environment variables, data layout, and how to orchestrate daily runs. Emphasizes the contract consumed by backtests.
 - `mm/backtest/README.md` — describes the replay engines, how to point them at recorded datasets, and how to extend fill models or paper exchanges.
 
-The recorder is the producer and the backtest is the consumer. Keep their shared `data/<SYMBOL>/<YYYYMMDD>/` structure intact so you can freely move sessions between live capture boxes and research machines.*** End Patch
+The recorder is the producer and the backtest is the consumer. Keep their shared `data/<SYMBOL>/<YYYYMMDD>/` structure intact so you can freely move sessions between live capture boxes and research machines.
+
+---
+
+## Running a backtest
+
+```bash
+pip install -r requirements.txt
+
+# Example (spot): run a single day
+DAY=20251216 SYMBOL=BTCUSDT python -m mm.runner_backtest
+```
+
+Outputs are written to `out_backtest/` by default:
+
+- `orders_<SYMBOL>.csv` — order lifecycle log (place/cancel/fill/close)
+- `fills_<SYMBOL>.csv` — executed fills including fees
+- `state_<SYMBOL>.csv` — inventory/cash/mark-to-market snapshots
+
+See `mm/backtest/README.md` for environment variables controlling latency, TTL/GTC, tick size and initial balances.
+
+## Running tests
+
+```bash
+pytest -q
+```
