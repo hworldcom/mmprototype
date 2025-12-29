@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import math
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Dict, Optional, Tuple, List
 
@@ -35,6 +35,10 @@ class BacktestConfig:
 
     # If True: reject orders that would exceed balances
     enforce_balances: bool = True
+
+    # Quoting realism
+    only_requote_on_change: bool = True
+    suppress_unfunded_quotes: bool = True
 
 
 def _floor_to_step(x: float, step: float) -> float:
@@ -226,10 +230,10 @@ class PaperExchange:
             expire_recv_ms=expire_ms,
             cancel_req_ms=None,
             cancel_effective_ms=None,
-            status="OPEN",
+            status="OPEN" if ok else "REJECTED",
         )
 
-        st = _OrderState(oo=oo, remaining_qty=qty, reject_reason=reason if not ok else "")
+        st = _OrderState(oo=oo, remaining_qty=(qty if ok else 0.0), reject_reason=reason if not ok else "")
         # Log the placement attempt regardless.
         self._log_order(recv_ms, oid, "PLACE", st)
 
@@ -308,19 +312,100 @@ class PaperExchange:
 
     def maybe_quote(self, market: MarketState):
         now = market.recv_ms
-        if self.last_quote_ms is None or (now - self.last_quote_ms) >= int(self.cfg.quote_interval_ms):
-            self.last_quote_ms = now
+        if self.last_quote_ms is not None and (now - self.last_quote_ms) < int(self.cfg.quote_interval_ms):
+            return
+        self.last_quote_ms = now
 
-            # Realistic cancel/replace: cancel requests go out now, but orders remain live until cancel ack.
-            self.cancel_all(now)
+        # 1) Compute desired quotes from the strategy.
+        quotes = self.quote_model.generate_quotes(market, self.position())
+        desired_by_side: Dict[str, Quote] = {}
+        for q in quotes:
+            qq = q
+            if qq.ttl_ms is None:
+                qq = Quote(side=qq.side, price=qq.price, qty=qq.qty, ttl_ms=self.cfg.order_ttl_ms)
+            desired_by_side[qq.side.upper()] = qq  # one per side (latest wins)
 
-            quotes = self.quote_model.generate_quotes(market, self.position())
-            for q in quotes:
-                # Use default TTL from cfg if quote doesn't specify (should always specify)
-                if q.ttl_ms is None:
-                    q = Quote(side=q.side, price=q.price, qty=q.qty, ttl_ms=self.cfg.order_ttl_ms)
-                self._place_order(now, q)
+        # 2) Compare against current open orders and only cancel/replace if something changed.
+        #    This prevents pathological churn (cancel same order, place same order).
+        keep_sides: set[str] = set()
+        if self.cfg.only_requote_on_change:
+            # Find best existing OPEN order per side that is not already in cancel-pending
+            existing_best: Dict[str, _OrderState] = {}
+            for st in self.open_orders.values():
+                if st.oo.status != "OPEN":
+                    continue
+                side = st.oo.side.upper()
+                if side not in ("BUY", "SELL"):
+                    continue
+                # Choose most aggressive order for that side (BUY highest px, SELL lowest px)
+                cur = existing_best.get(side)
+                if cur is None:
+                    existing_best[side] = st
+                else:
+                    if side == "BUY" and st.oo.price > cur.oo.price:
+                        existing_best[side] = st
+                    if side == "SELL" and st.oo.price < cur.oo.price:
+                        existing_best[side] = st
 
+            for side, dq in desired_by_side.items():
+                ex = existing_best.get(side)
+                if ex is None:
+                    continue
+
+                # Compare after applying exchange rounding rules
+                dpx = round_price_for_side(float(dq.price), self.cfg.tick_size, side)
+                dqty = round_qty(float(dq.qty), self.cfg.qty_step)
+
+                exp_ok = True
+                if ex.oo.expire_recv_ms is not None:
+                    # Keep only if it will survive until (at least) the next requote + cancel latency
+                    exp_ok = (ex.oo.expire_recv_ms - now) >= (int(self.cfg.quote_interval_ms) + int(self.cfg.cancel_latency_ms))
+
+                if exp_ok and abs(ex.oo.price - dpx) < 1e-12 and abs(ex.remaining_qty - dqty) < 1e-12:
+                    keep_sides.add(side)
+
+        # 3) Cancel only sides that need to change
+        for oid, st in list(self.open_orders.items()):
+            if st.oo.status != "OPEN":
+                continue
+            if st.oo.side.upper() in keep_sides:
+                continue
+            # Send cancel request; order remains fill-eligible until cancel ack.
+            self.cancel_order(now, oid)
+
+        # 4) Place quotes (optionally suppressing unfunded sides)
+        for side, dq in desired_by_side.items():
+            if side in keep_sides:
+                continue
+
+            # Apply rounding now so we can reason about funding before placing.
+            px = round_price_for_side(float(dq.price), self.cfg.tick_size, side)
+            qty = round_qty(float(dq.qty), self.cfg.qty_step)
+
+            ok, reason = self._can_place(side, px, qty)
+            if self.cfg.suppress_unfunded_quotes and not ok:
+                # Do not attempt placement; log a SKIP for traceability and to avoid spammy REJECT rows.
+                oid = str(uuid.uuid4())
+                active_ms = now + int(self.cfg.order_latency_ms)
+                expire_ms = active_ms + int(dq.ttl_ms if dq.ttl_ms is not None else self.cfg.order_ttl_ms)
+                oo = OpenOrder(
+                    order_id=oid,
+                    side=side,
+                    price=px,
+                    qty=qty,
+                    placed_recv_ms=now,
+                    active_recv_ms=active_ms,
+                    expire_recv_ms=expire_ms,
+                    cancel_req_ms=None,
+                    cancel_effective_ms=None,
+                    status="SKIPPED",
+                )
+                st = _OrderState(oo=oo, remaining_qty=0.0, reject_reason=reason)
+                self._log_order(now, oid, "SKIP", st)
+                continue
+
+            # Proceed with placement; _place_order will enforce balances (and log REJECTED if needed).
+            self._place_order(now, dq)
     def _expire_and_cancel_ack(self, now_ms: int):
         # Expire
         for oid in list(self.open_orders.keys()):
@@ -329,6 +414,7 @@ class PaperExchange:
                 continue
             oo = st.oo
             if oo.expire_recv_ms is not None and now_ms >= oo.expire_recv_ms:
+                st.oo = replace(st.oo, status="EXPIRED")
                 self._log_order(now_ms, oid, "EXPIRE", st)
                 self.open_orders.pop(oid, None)
 
@@ -339,6 +425,7 @@ class PaperExchange:
                 continue
             oo = st.oo
             if oo.status == "CANCEL_PENDING" and oo.cancel_effective_ms is not None and now_ms >= oo.cancel_effective_ms:
+                st.oo = replace(st.oo, status="CANCELLED")
                 self._log_order(now_ms, oid, "CANCEL_ACK", st)
                 self.open_orders.pop(oid, None)
 
@@ -368,3 +455,4 @@ class PaperExchange:
         fills = self.fill_model.on_trade(recv_ms, price, qty, is_buyer_maker, open_for_fills)
         for f in fills:
             self._apply_fill(f)
+            

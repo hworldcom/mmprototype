@@ -16,6 +16,7 @@ from mm.backtest.quotes.avellaneda_stoikov import AvellanedaStoikovQuoteModel
 from mm.backtest.quotes.inventory_skew import InventorySkewQuoteModel
 from mm.backtest.quotes.microstructure import MicrostructureQuoteModel
 from mm.backtest.quotes.hybrid import HybridASMicrostructureQuoteModel
+from mm.backtest.quotes.balance_aware import BalanceAwareQuoteModel
 
 # Fill models
 from mm.backtest.fills.trade_driven import TradeDrivenFillModel
@@ -174,6 +175,8 @@ def backtest_day(
     fill_params: Optional[Dict[str, float]] = None,
 ) -> BacktestRunStats:
     quote_model = make_quote_model(quote_model_name, qty=quote_qty, tick_size=tick_size, params=quote_params)
+    # Filter unfundable quotes under spot constraints (cash/inventory/min-notional).
+    quote_model = BalanceAwareQuoteModel(inner=quote_model, maker_fee_rate=maker_fee_rate, min_notional=min_notional)
     fill_model = make_fill_model(fill_model_name, params=fill_params)
 
     cfg = BacktestConfig(
