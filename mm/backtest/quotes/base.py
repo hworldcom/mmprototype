@@ -9,7 +9,7 @@ class Quote:
     side: str          # "BUY" | "SELL"
     price: float
     qty: float
-    ttl_ms: int = 1000
+    ttl_ms: Optional[int] = None  # None => no expiry unless configured globally
 
 
 @dataclass(frozen=True)

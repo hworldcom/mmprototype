@@ -228,11 +228,12 @@ class PaperExchange:
         ok, reason = self._can_place(side, px, qty)
         active_ms = recv_ms + int(self.cfg.order_latency_ms)
         # Exchange expiry: default to GTC unless an explicit TTL is configured.
-        ttl_ms: Optional[int] = q.ttl_ms
+        ttl_ms = self.cfg.order_ttl_ms
         if ttl_ms is None:
-            ttl_ms = self.cfg.order_ttl_ms
-        expire_ms: Optional[int] = None
-        if ttl_ms is not None and int(ttl_ms) > 0:
+            ttl_ms = q.ttl_ms  # may be None
+
+        expire_ms = None
+        if ttl_ms is not None and ttl_ms > 0:
             expire_ms = active_ms + int(ttl_ms)
 
         oo = OpenOrder(
