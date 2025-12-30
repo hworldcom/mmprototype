@@ -1,4 +1,6 @@
 numpy
+pandas
+scipy
 pyyaml
 python-binance>=1.0.19
 websocket-client>=1.6

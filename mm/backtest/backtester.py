@@ -160,6 +160,10 @@ def backtest_day(
     out_dir: Path,
     quote_model_name: str = "avellaneda_stoikov",
     fill_model_name: str = "trade_driven",
+    # Optional overrides (used by calibration runners).
+    # If provided, these objects are used instead of the factory functions above.
+    quote_model_override=None,
+    fill_model_override=None,
     quote_qty: float = 0.001,
     maker_fee_rate: float = 0.001,
     order_latency_ms: int = 50,
@@ -177,10 +181,13 @@ def backtest_day(
     quote_params: Optional[Dict[str, float]] = None,
     fill_params: Optional[Dict[str, float]] = None,
 ) -> BacktestRunStats:
-    quote_model = make_quote_model(quote_model_name, qty=quote_qty, tick_size=tick_size, params=quote_params)
+    quote_model = quote_model_override or make_quote_model(
+        quote_model_name, qty=quote_qty, tick_size=tick_size, params=quote_params
+    )
     # Filter unfundable quotes under spot constraints (cash/inventory/min-notional).
     quote_model = BalanceAwareQuoteModel(inner=quote_model, maker_fee_rate=maker_fee_rate, min_notional=min_notional)
-    fill_model = make_fill_model(fill_model_name, params=fill_params)
+
+    fill_model = fill_model_override or make_fill_model(fill_model_name, params=fill_params)
 
     cfg = BacktestConfig(
         maker_fee_rate=maker_fee_rate,

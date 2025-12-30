@@ -33,6 +33,7 @@ htmlcov/
 out_backtest/
 out_replay/
 logs/
+out/
 
 # ============================
 # Recorded market data
