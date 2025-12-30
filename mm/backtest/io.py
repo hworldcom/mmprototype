@@ -27,6 +27,8 @@ class Trade:
     price: float
     qty: float
     is_buyer_maker: int
+    trade_id: int | None = None
+    trade_time_ms: int | None = None
 
 
 @dataclass(frozen=True)
@@ -96,9 +98,13 @@ def iter_trades_csv(path: Path) -> Iterator[Trade]:
     with path.open("r", newline="") as f:
         r = csv.DictReader(f)
         for row in r:
+            trade_id = row.get("trade_id")
+            trade_time_ms = row.get("trade_time_ms")
             yield Trade(
                 E=int(row["event_time_ms"]),
                 recv_ms=int(row.get("recv_time_ms", row["event_time_ms"])),
+                trade_id=int(trade_id) if trade_id not in (None, "") else None,
+                trade_time_ms=int(trade_time_ms) if trade_time_ms not in (None, "") else None,
                 price=float(row["price"]),
                 qty=float(row["qty"]),
                 is_buyer_maker=int(row["is_buyer_maker"]),

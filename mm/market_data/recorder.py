@@ -25,7 +25,7 @@ from mm.logging_config import setup_logging
 from .ws_stream import BinanceWSStream
 from .sync_engine import OrderBookSyncEngine
 from .snapshot import record_rest_snapshot
-from .buffered_writer import BufferedCSVWriter
+from .buffered_writer import BufferedCSVWriter, BufferedTextWriter
 
 ORIGINAL_RECORD_REST_SNAPSHOT = record_rest_snapshot
 
@@ -39,6 +39,14 @@ SNAPSHOT_LIMIT = 1000
 ORDERBOOK_BUFFER_ROWS = 500
 TRADES_BUFFER_ROWS = 1000
 BUFFER_FLUSH_INTERVAL_SEC = 1.0
+
+# WS keepalive/reconnect
+WS_PING_INTERVAL_S = int(os.getenv("WS_PING_INTERVAL_S", "20"))
+WS_PING_TIMEOUT_S = int(os.getenv("WS_PING_TIMEOUT_S", "10"))
+WS_RECONNECT_BACKOFF_S = float(os.getenv("WS_RECONNECT_BACKOFF_S", "1.0"))
+
+# TLS verification should remain enabled by default.
+INSECURE_TLS = os.getenv("INSECURE_TLS", "0").strip() in ("1", "true", "True")
 
 # If True, write raw WS depth diffs for production-faithful replay
 STORE_DEPTH_DIFFS = True
@@ -116,7 +124,16 @@ def run_recorder():
             [],
         )
     )
-    tr_header = ["event_time_ms", "recv_time_ms", "run_id", "price", "qty", "is_buyer_maker"]
+    tr_header = [
+        "event_time_ms",
+        "recv_time_ms",
+        "run_id",
+        "trade_id",
+        "trade_time_ms",
+        "price",
+        "qty",
+        "is_buyer_maker",
+    ]
 
     ob_writer = BufferedCSVWriter(
         ob_path,
@@ -147,10 +164,16 @@ def run_recorder():
     if ev_new:
         ev_w.writerow(["event_id", "recv_time_ms", "run_id", "type", "epoch_id", "details_json"])
         ev_f.flush()
-    diff_f = None
+    diff_writer: BufferedTextWriter | None = None
     if STORE_DEPTH_DIFFS:
         diff_path = diffs_dir / f"depth_diffs_{symbol}_{day_str}.ndjson.gz"
-        diff_f = gzip.open(diff_path, "at", encoding="utf-8")
+        # Buffer gzip writes to avoid per-message flush costs.
+        diff_writer = BufferedTextWriter(
+            diff_path,
+            flush_lines=5000,
+            flush_interval_s=BUFFER_FLUSH_INTERVAL_SEC,
+            opener=lambda p: gzip.open(p, "at", encoding="utf-8"),
+        )
 
     log.info("Day dir:         %s", day_dir)
     log.info("Orderbook out:   %s", ob_path)
@@ -308,17 +331,36 @@ def run_recorder():
         ob_writer.write_row(row)
         ob_rows_written += 1
 
+    ws_open_count = 0
+
     def on_open():
         nonlocal epoch_id
-        epoch_id = 0
-        emit_event("ws_open", {"ws_url": ws_url})
-        try:
-            fetch_snapshot("initial")
-        except Exception as e:
-            log.exception("Failed initial snapshot; closing WS")
-            write_gap("fatal", f"initial_snapshot_failed: {e}")
-            emit_event("fatal", {"reason": "initial_snapshot_failed", "error": str(e)})
-            stream.close()
+        nonlocal ws_open_count
+        ws_open_count += 1
+
+        # First open: initial snapshot. Any subsequent open is treated as a reconnect and triggers a resync.
+        if ws_open_count == 1:
+            epoch_id = 0
+            emit_event(
+                "ws_open",
+                {
+                    "ws_url": ws_url,
+                    "ping_interval_s": WS_PING_INTERVAL_S,
+                    "ping_timeout_s": WS_PING_TIMEOUT_S,
+                    "insecure_tls": INSECURE_TLS,
+                },
+            )
+            try:
+                fetch_snapshot("initial")
+            except Exception as e:
+                log.exception("Failed initial snapshot; closing WS")
+                write_gap("fatal", f"initial_snapshot_failed: {e}")
+                emit_event("fatal", {"reason": "initial_snapshot_failed", "error": str(e)})
+                stream.close()
+        else:
+            emit_event("ws_reconnect_open", {"ws_url": ws_url, "open_count": ws_open_count})
+            # Any reconnect implies potential missed diffs; always resync.
+            resync("ws_reconnect")
 
     def on_depth(data, recv_ms: int):
         nonlocal depth_msg_count, last_depth_event_ms
@@ -327,7 +369,7 @@ def run_recorder():
         last_depth_event_ms = int(data.get("E", 0))
 
         # Always store raw diffs for replay, even when not synced
-        if diff_f is not None:
+        if diff_writer is not None:
             try:
                 minimal = {
                     "recv_ms": recv_ms,
@@ -337,8 +379,7 @@ def run_recorder():
                     "b": data.get("b", []),
                     "a": data.get("a", []),
                 }
-                diff_f.write(json.dumps(minimal, ensure_ascii=False) + "\n")
-                diff_f.flush()
+                diff_writer.write_line(json.dumps(minimal, ensure_ascii=False) + "\n")
             except Exception:
                 log.exception("Failed writing depth diffs")
 
@@ -380,6 +421,8 @@ def run_recorder():
                     int(data.get("E", 0)),
                     recv_ms,
                     run_id,
+                    int(data.get("t", 0)),
+                    int(data.get("T", 0)),
                     f'{float(data["p"]):.{DECIMALS}f}',
                     f'{float(data["q"]):.{DECIMALS}f}',
                     int(data["m"]),
@@ -393,19 +436,41 @@ def run_recorder():
 
     ws_url = f"wss://stream.binance.com:9443/stream?streams={symbol.lower()}@depth@100ms/{symbol.lower()}@trade"
 
-    stream = BinanceWSStream(
-        ws_url=ws_url,
-        on_depth=on_depth,
-        on_trade=on_trade,
-        on_open=on_open,
-        insecure_tls=True,
-    )
+    def on_status(typ: str, details: dict):
+        # Keep the on-disk events ledger authoritative for operational debugging.
+        emit_event(typ, details)
+
+    # Backwards-compatible construction: tests may monkeypatch BinanceWSStream with a
+    # simplified fake that does not accept newer parameters.
+    try:
+        stream = BinanceWSStream(
+            ws_url=ws_url,
+            on_depth=on_depth,
+            on_trade=on_trade,
+            on_open=on_open,
+            on_status=on_status,
+            insecure_tls=INSECURE_TLS,
+            ping_interval_s=WS_PING_INTERVAL_S,
+            ping_timeout_s=WS_PING_TIMEOUT_S,
+            reconnect_backoff_s=WS_RECONNECT_BACKOFF_S,
+        )
+    except TypeError:
+        stream = BinanceWSStream(
+            ws_url=ws_url,
+            on_depth=on_depth,
+            on_trade=on_trade,
+            on_open=on_open,
+            insecure_tls=INSECURE_TLS,
+        )
 
     emit_event("run_start", {"symbol": symbol, "day": day_str})
     log.info("Connecting WS: %s", ws_url)
 
     try:
-        stream.run_forever()
+        run_fn = getattr(stream, "run", None) or getattr(stream, "run_forever", None)
+        if run_fn is None:
+            raise RuntimeError("BinanceWSStream has no run()/run_forever()")
+        run_fn()
     finally:
         # Emit stop event BEFORE closing event file
         try:
@@ -428,9 +493,9 @@ def run_recorder():
             except Exception:
                 pass
 
-        if diff_f is not None:
+        if diff_writer is not None:
             try:
-                diff_f.close()
+                diff_writer.close()
             except Exception:
                 pass
 

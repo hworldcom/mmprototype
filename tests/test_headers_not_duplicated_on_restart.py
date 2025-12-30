@@ -84,7 +84,16 @@ def test_headers_written_once_across_restarts(monkeypatch, tmp_path):
         return sum(1 for r in rows if r == expected_header)
 
     ob_header = ["event_time_ms", "recv_time_ms", "run_id", "epoch_id"]
-    tr_header = ["event_time_ms", "recv_time_ms", "run_id", "price", "qty", "is_buyer_maker"]
+    tr_header = [
+        "event_time_ms",
+        "recv_time_ms",
+        "run_id",
+        "trade_id",
+        "trade_time_ms",
+        "price",
+        "qty",
+        "is_buyer_maker",
+    ]
     ev_header = ["event_id", "recv_time_ms", "run_id", "type", "epoch_id", "details_json"]
 
     # orderbook header has extra columns beyond the first 4; compare prefix for robustness

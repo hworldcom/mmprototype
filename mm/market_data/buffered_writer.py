@@ -85,3 +85,74 @@ class BufferedCSVWriter:
     def ensure_file(self) -> None:
         """Ensure the backing file exists with headers even if no rows are written yet."""
         self._ensure_open()
+
+
+class BufferedTextWriter:
+    """Batch text lines in memory before flushing to disk.
+
+    This is intended for high-frequency, append-only logs where flushing every line would
+    induce unnecessary I/O pressure and distort timestamps.
+    """
+
+    def __init__(
+        self,
+        path: str | Path,
+        flush_lines: int = 5000,
+        flush_interval_s: float = 1.0,
+        opener=None,
+    ) -> None:
+        self.path = Path(path)
+        self.flush_lines = max(1, int(flush_lines))
+        self.flush_interval_s = max(0.0, float(flush_interval_s))
+        self.opener = opener  # optional callable(path) -> file-like
+
+        self._buffer: list[str] = []
+        self._file = None
+        self._last_flush = time.monotonic()
+
+    def _ensure_open(self) -> None:
+        if self._file is not None:
+            return
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if self.opener is not None:
+            self._file = self.opener(self.path)
+        else:
+            # Default to plain text append
+            self._file = self.path.open("a", encoding="utf-8")
+
+    def write_line(self, line: str) -> None:
+        self._ensure_open()
+        self._buffer.append(line)
+        if self._should_flush():
+            self.flush()
+
+    def flush(self) -> None:
+        if not self._buffer or self._file is None:
+            self._last_flush = time.monotonic()
+            return
+        self._file.writelines(self._buffer)
+        self._file.flush()
+        self._buffer.clear()
+        self._last_flush = time.monotonic()
+
+    def close(self) -> None:
+        try:
+            self.flush()
+        finally:
+            if self._file is not None:
+                self._file.close()
+                self._file = None
+
+    def _should_flush(self) -> bool:
+        if len(self._buffer) >= self.flush_lines:
+            return True
+        if self.flush_interval_s == 0.0:
+            return False
+        return (time.monotonic() - self._last_flush) >= self.flush_interval_s
+
+    def __enter__(self) -> "BufferedTextWriter":
+        self._ensure_open()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()
