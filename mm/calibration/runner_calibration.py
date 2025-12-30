@@ -60,6 +60,10 @@ def main() -> None:
     ap.add_argument("--tick-size", type=float, default=float(os.getenv("TICK_SIZE", "0.01")))
     ap.add_argument("--quote-qty", type=float, default=float(os.getenv("QUOTE_QTY", "0.001")))
     ap.add_argument("--maker-fee-rate", type=float, default=float(os.getenv("MAKER_FEE_RATE", "0.001")))
+    # IMPORTANT: Calibration runs need non-zero balances, otherwise BalanceAwareQuoteModel
+    # will filter out all quotes and you will see 0 orders/fills.
+    ap.add_argument("--initial-cash", type=float, default=float(os.getenv("INITIAL_CASH", "1000")))
+    ap.add_argument("--initial-inventory", type=float, default=float(os.getenv("INITIAL_INVENTORY", "0")))
     ap.add_argument("--order-latency-ms", type=int, default=int(os.getenv("ORDER_LATENCY_MS", "50")))
     ap.add_argument("--cancel-latency-ms", type=int, default=int(os.getenv("CANCEL_LATENCY_MS", "25")))
     ap.add_argument("--requote-interval-ms", type=int, default=int(os.getenv("REQUOTE_INTERVAL_MS", "250")))
@@ -127,6 +131,8 @@ def main() -> None:
             order_ttl_ms=None,
             refresh_interval_ms=None,
             tick_size=args.tick_size,
+            initial_cash=args.initial_cash,
+            initial_inventory=args.initial_inventory,
         )
         run_manifest["runs"].append({"type": "ladder", "dir": str(run_dir), "stats": asdict(stats)})
 
@@ -174,6 +180,8 @@ def main() -> None:
                 order_ttl_ms=None,
                 refresh_interval_ms=None,
                 tick_size=args.tick_size,
+                initial_cash=args.initial_cash,
+                initial_inventory=args.initial_inventory,
             )
 
             run_manifest["runs"].append({"type": "fixed", "delta": d, "dir": str(run_dir), "stats": asdict(stats)})
