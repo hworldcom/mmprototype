@@ -36,6 +36,16 @@ def _env_json(key: str) -> dict:
     return json.loads(v)
 
 
+def _load_params_file(path: str) -> dict:
+    """Load a JSON params file if provided."""
+    if not path:
+        return {}
+    p = Path(path)
+    if not p.exists():
+        raise SystemExit(f"Params file not found: {p}")
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
 def main():
     data_root = Path(os.getenv("DATA_ROOT", "data"))
     out_dir = Path(os.getenv("OUT_DIR", "out_backtest"))
@@ -68,7 +78,20 @@ def main():
     initial_inventory = _env_float("INITIAL_INVENTORY", 0.0)
 
     quote_params = _env_json("QUOTE_PARAMS_JSON")
-    fill_params = _env_json("FILL_PARAMS_JSON")
+
+    # Optionally load Poisson/Hybrid parameters from a file (recommended for calibration outputs).
+    fill_params_file = os.getenv("FILL_PARAMS_FILE", "")
+    fill_params = _load_params_file(fill_params_file) if fill_params_file else _env_json("FILL_PARAMS_JSON")
+
+    # If the file contains metadata (e.g. from calibration), keep only model parameters.
+    if fill_params_file and any(k in fill_params for k in ("A", "k")):
+        fill_params = {
+            "A": float(fill_params.get("A")),
+            "k": float(fill_params.get("k")),
+            "dt_ms": int(fill_params.get("dt_ms", 100)),
+            # allow_partial/max_fill_qty may still be supplied by user for hybrid/trade-driven
+            **{k: v for k, v in fill_params.items() if k in ("allow_partial", "max_fill_qty")},
+        }
 
     stats = backtest_day(
         root=data_root,
