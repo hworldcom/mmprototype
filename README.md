@@ -50,6 +50,11 @@ To correctly test an Avellaneda–Stoikov‑style strategy we need:
 │   │   ├── buffered_writer.py
 │   │   ├── ws_stream.py
 │   │   └── snapshot.py
+│   ├── calibration/
+│   │   ├── runner_calibration.py
+│   │   ├── exposure.py
+│   │   ├── poisson_fit.py
+│   │   └── quotes/
 │   └── backtest/
 │       ├── README.md
 │       ├── replay.py
@@ -72,6 +77,7 @@ To correctly test an Avellaneda–Stoikov‑style strategy we need:
 | Path | Purpose | Key dependency |
 |------|---------|----------------|
 | `mm/market_data/` | Real-time recorder that captures Binance Spot depth/trade streams, reconstructs the local order book, and writes CSV / NDJSON artifacts plus an events ledger. | Consumed by `mm/backtest`, documented in `mm/market_data/README.md`. |
+| `mm/calibration/` | Parameter calibration utilities that *produce* inputs for later backtests (e.g. Poisson A,k). | Consumes recorder outputs and emits JSON/CSV artifacts under `out/calibration/`. |
 | `mm/backtest/` | Offline replay, paper exchange, and fill-model experiments that operate on recorded data. | Requires recorder outputs (same folder layout) at runtime; documented in `mm/backtest/README.md`. |
 
 These subtrees now ship with their own READMEs for day-to-day usage, whereas this root README stays focused on the overarching goals and roadmap.
@@ -134,6 +140,10 @@ All numeric values are stored in **human‑readable fixed decimals**.
 - [ ] Parameter calibration
 - [ ] Inventory control
 - [ ] PnL attribution
+
+### Phase 3.5 — Calibration (Prerequisite)
+- [x] Poisson fill calibration runners (ladder sweep and fixed-spread runs)
+- [x] Backtest ingestion of calibration outputs (FILL_PARAMS_FILE)
 
 ### Phase 5 — Live / Testnet
 - [ ] Testnet trading
@@ -215,6 +225,64 @@ The recorder is the producer and the backtest is the consumer. Keep their shared
 pip install -r requirements.txt
 
 # Example (spot): run a single day
+DAY=20251216 SYMBOL=BTCUSDT python -m mm.runner_backtest
+```
+
+---
+
+## Calibrating Poisson fill parameters (A,k)
+
+Calibration is treated as a prerequisite step: it **produces** parameters which
+later backtests **consume**.
+
+Outputs are written under:
+
+```
+out/calibration/<method>/<SYMBOL>/<DAY>_<timestamp>/
+  calibration_points.csv
+  poisson_fit.json
+  run_manifest.json
+  (per-run folders with orders/fills/state)
+```
+
+### Design A: Ladder sweep (recommended for calibration)
+
+Runs a single day replay while cycling through a list of deltas (`--deltas`) and
+holding each delta for `--dwell-ms`.
+
+```bash
+pip install -r requirements.txt
+
+python -m mm.calibration.runner_calibration \
+  --method ladder \
+  --symbol BTCUSDT \
+  --day 20251216 \
+  --deltas 1,2,3,5,8,13 \
+  --dwell-ms 60000 \
+  --fit-method poisson_mle
+```
+
+### Design B: Fixed-spread runs (easy operationally)
+
+Runs multiple backtests (one per delta) and fits across runs.
+
+```bash
+python -m mm.calibration.runner_calibration \
+  --method fixed \
+  --symbol BTCUSDT \
+  --day 20251216 \
+  --deltas 1,2,3,5,8,13 \
+  --fit-method poisson_mle
+```
+
+### Using calibration outputs in backtests
+
+Point the backtest runner at the `poisson_fit.json` file:
+
+```bash
+export FILL_MODEL=poisson
+export FILL_PARAMS_FILE=out/calibration/ladder/BTCUSDT/20251216_<timestamp>/poisson_fit.json
+
 DAY=20251216 SYMBOL=BTCUSDT python -m mm.runner_backtest
 ```
 
