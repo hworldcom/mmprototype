@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import logging
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -33,6 +34,7 @@ from mm.calibration.exposure import compute_bucketed_exposure, compute_run_level
 from mm.calibration.poisson_fit import fit_log_linear, fit_poisson_mle
 from mm.calibration.quotes.calibration_ladder import CalibrationLadderQuoteModel
 from mm.calibration.quotes.fixed_spread import FixedSpreadQuoteModel
+from mm.logging_config import setup_run_logging
 
 
 def _parse_int_list(s: str) -> List[int]:
@@ -80,7 +82,30 @@ def main() -> None:
     if not deltas:
         raise SystemExit("--deltas must contain at least one integer delta")
 
-    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    # Run-scoped logging for calibration (batch job).
+    log_level = os.getenv("LOG_LEVEL", "INFO")
+    log_root = os.getenv("LOG_ROOT", "out/logs")
+    run_id = os.getenv("RUN_ID", datetime.utcnow().strftime("%Y%m%dT%H%M%SZ"))
+    log_path = setup_run_logging(
+        level=log_level,
+        run_type="calibration",
+        method=args.method,
+        symbol=args.symbol,
+        yyyymmdd=args.yyyymmdd,
+        run_id=run_id,
+        base_dir=log_root,
+    )
+    logger = logging.getLogger(__name__)
+    logger.info(
+        "Calibration run start symbol=%s day=%s method=%s run_id=%s log_path=%s",
+        args.symbol,
+        args.yyyymmdd,
+        args.method,
+        run_id,
+        log_path,
+    )
+
+    ts = run_id
     out_base = Path(args.out_root) / "calibration" / args.method / args.symbol / f"{args.yyyymmdd}_{ts}"
     _ensure_dir(out_base)
 
@@ -93,6 +118,8 @@ def main() -> None:
         "symbol": args.symbol,
         "day": args.yyyymmdd,
         "method": args.method,
+        "run_id": run_id,
+        "log_path": str(log_path),
         "deltas": deltas,
         "tick_size": args.tick_size,
         "quote_qty": args.quote_qty,
@@ -227,6 +254,9 @@ def main() -> None:
 
     _write_json(out_base / "poisson_fit.json", fit_out)
     _write_json(out_base / "run_manifest.json", run_manifest)
+
+    logger.info("Calibration run complete symbol=%s day=%s method=%s run_id=%s", args.symbol, args.yyyymmdd, args.method, run_id)
+    logger.info("Outputs points=%s fit=%s manifest=%s", out_base / "calibration_points.csv", out_base / "poisson_fit.json", out_base / "run_manifest.json")
 
     print("Calibration complete")
     print("Output directory:", out_base)

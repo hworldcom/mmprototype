@@ -3,12 +3,16 @@ from __future__ import annotations
 import csv
 import math
 import uuid
+import logging
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Dict, Optional, Tuple, List
 
 from mm.backtest.quotes.base import MarketState, PositionState, Quote, QuoteModel
 from mm.backtest.fills.base import OpenOrder, FillModel, Fill
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -129,6 +133,22 @@ class PaperExchange:
             "cancel_reason",
         ])
 
+        logger.info(
+            "PaperExchange init symbol=%s fee=%.6f order_lat=%dms cancel_lat=%dms quote_interval=%dms ttl_ms=%s refresh_ms=%s tick=%.10f qty_step=%.10f min_notional=%.8f initial_cash=%.8f initial_inv=%.8f",
+            self.symbol,
+            float(cfg.maker_fee_rate),
+            int(cfg.order_latency_ms),
+            int(cfg.cancel_latency_ms),
+            int(cfg.quote_interval_ms),
+            str(cfg.order_ttl_ms),
+            str(cfg.refresh_interval_ms),
+            float(cfg.tick_size),
+            float(cfg.qty_step),
+            float(cfg.min_notional),
+            float(cfg.initial_cash),
+            float(cfg.initial_inventory),
+        )
+
     def close(self):
         for f in (self._fills_f, self._state_f, self._orders_f):
             try:
@@ -226,6 +246,15 @@ class PaperExchange:
         qty = round_qty(float(q.qty), self.cfg.qty_step)
 
         ok, reason = self._can_place(side, px, qty)
+        logger.debug(
+            "PLACE_ATTEMPT recv_ms=%d side=%s px=%.8f qty=%.8f ok=%s reason=%s",
+            recv_ms,
+            side,
+            px,
+            qty,
+            ok,
+            reason,
+        )
         active_ms = recv_ms + int(self.cfg.order_latency_ms)
         # Exchange expiry: default to GTC unless an explicit TTL is configured.
         ttl_ms: Optional[int] = q.ttl_ms
@@ -259,6 +288,7 @@ class PaperExchange:
 
         if not ok:
             # Do not add to book.
+            logger.debug("PLACE_REJECTED oid=%s reason=%s cash=%.8f inv=%.8f", oid, reason, self.cash, self.inventory)
             return
 
         self.open_orders[oid] = st
@@ -270,6 +300,7 @@ class PaperExchange:
         oo = st.oo
         if oo.status == "CANCEL_PENDING":
             return
+        logger.debug("CANCEL_REQ recv_ms=%d oid=%s reason=%s", recv_ms, order_id, cancel_reason)
         cancel_eff = recv_ms + int(self.cfg.cancel_latency_ms)
         new_oo = OpenOrder(
             order_id=oo.order_id,
@@ -351,6 +382,7 @@ class PaperExchange:
 
         # 1) Compute desired quotes from the strategy.
         quotes = self.quote_model.generate_quotes(market, self.position())
+        logger.debug("GENERATE_QUOTES recv_ms=%d mid=%.8f n_quotes=%d", now, market.mid, len(quotes))
         desired_by_side: Dict[str, Quote] = {}
         for q in quotes:
             # Keep ttl_ms as-is; if None, we will treat it as GTC unless cfg.order_ttl_ms is set.
@@ -434,6 +466,7 @@ class PaperExchange:
             ok, reason = self._can_place(side, px, qty)
             if self.cfg.suppress_unfunded_quotes and not ok:
                 # Do not attempt placement; log a SKIP for traceability and to avoid spammy REJECT rows.
+                logger.debug("SKIP_UNFUNDED recv_ms=%d side=%s px=%.8f qty=%.8f reason=%s cash=%.8f inv=%.8f", now, side, px, qty, reason, self.cash, self.inventory)
                 oid = str(uuid.uuid4())
                 active_ms = now + int(self.cfg.order_latency_ms)
                 # SKIP pseudo-order: include expiry only if TTL configured.

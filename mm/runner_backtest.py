@@ -2,9 +2,12 @@
 
 import os
 import json
+import logging
+from datetime import datetime
 from pathlib import Path
 
 from mm.backtest.backtester import backtest_day
+from mm.logging_config import setup_run_logging
 
 
 def _env_float(key: str, default: float) -> float:
@@ -55,6 +58,21 @@ def main():
 
     if not yyyymmdd:
         raise SystemExit("DAY env var is required (YYYYMMDD).")
+
+    # Run-scoped logging (batch job). This makes debugging deterministic.
+    log_level = os.getenv("LOG_LEVEL", "INFO")
+    log_root = os.getenv("LOG_ROOT", "out/logs")
+    run_id = os.getenv("RUN_ID", datetime.utcnow().strftime("%Y%m%dT%H%M%SZ"))
+    log_path = setup_run_logging(
+        level=log_level,
+        run_type="backtest",
+        symbol=symbol,
+        yyyymmdd=yyyymmdd,
+        run_id=run_id,
+        base_dir=log_root,
+    )
+    logger = logging.getLogger(__name__)
+    logger.info("Backtest run start symbol=%s day=%s run_id=%s log_path=%s", symbol, yyyymmdd, run_id, log_path)
 
     quote_model = os.getenv("QUOTE_MODEL", "avellaneda_stoikov")
     fill_model = os.getenv("FILL_MODEL", "trade_driven")
@@ -116,6 +134,8 @@ def main():
         fill_params=fill_params,
     )
 
+    logger.info("Backtest run complete symbol=%s day=%s run_id=%s", symbol, yyyymmdd, run_id)
+    logger.info("Outputs orders=%s fills=%s state=%s", getattr(stats, "orders_path", ""), getattr(stats, "fills_path", ""), getattr(stats, "state_path", ""))
     print(f"Backtest finished for {symbol} {yyyymmdd}")
     print(stats)
 
