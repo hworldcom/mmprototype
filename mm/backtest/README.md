@@ -195,6 +195,7 @@ Quoting:
 Fills:
 - `FILL_MODEL` (default: `trade_driven`)
 - `FILL_PARAMS_JSON` (default: `{}`)
+- `FILL_PARAMS_FILE` (optional): path to a JSON file containing fill parameters (e.g. `out/calibration/.../poisson_fit.json`). If set, this takes precedence over `FILL_PARAMS_JSON`.
 - `MAKER_FEE_RATE` (default: `0.001`)
 
 Realism:
