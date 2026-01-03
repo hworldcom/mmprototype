@@ -20,7 +20,7 @@ from mm.backtest.quotes.balance_aware import BalanceAwareQuoteModel
 
 # Fill models
 from mm.backtest.fills.trade_driven import TradeDrivenFillModel
-from mm.backtest.fills.poisson import PoissonFillModel
+from mm.backtest.fills.poisson import PoissonFillModel, TimeVaryingPoissonFillModel
 from mm.backtest.fills.hybrid import HybridFillModel
 
 
@@ -119,7 +119,7 @@ def make_quote_model(name: str, *, qty: float, tick_size: float, params: Optiona
     raise ValueError(f"Unknown quote model: {name!r}")
 
 
-def make_fill_model(name: str, params: Optional[Dict[str, float]] = None):
+def make_fill_model(name: str, params: Optional[Dict[str, float]] = None, *, tick_size: float = 0.01):
     """Factory for fill models."""
     params = params or {}
     n = name.lower()
@@ -130,10 +130,22 @@ def make_fill_model(name: str, params: Optional[Dict[str, float]] = None):
             max_fill_qty=float(params.get("max_fill_qty", 1e18)),
         )
 
+    if n in ("poisson_schedule", "schedule_poisson"):
+        # expects params['schedule'] as a list of {start_ms,end_ms,A,k}
+        schedule = params.get("schedule")
+        if schedule is None:
+            raise ValueError("poisson_schedule requires fill_params['schedule']")
+        return TimeVaryingPoissonFillModel(
+            schedule=schedule,
+            tick_size=float(params.get("tick_size", tick_size)),
+            dt_ms=int(params.get("dt_ms", 100)),
+        )
+
     if n in ("poisson",):
         return PoissonFillModel(
             A=float(params.get("A", 1.0)),
             k=float(params.get("k", 1.5)),
+            tick_size=float(params.get("tick_size", tick_size)),
             dt_ms=int(params.get("dt_ms", 100)),
         )
 
@@ -146,6 +158,7 @@ def make_fill_model(name: str, params: Optional[Dict[str, float]] = None):
             tick_model=PoissonFillModel(
                 A=float(params.get("A", 1.0)),
                 k=float(params.get("k", 1.5)),
+                tick_size=float(params.get("tick_size", tick_size)),
                 dt_ms=int(params.get("dt_ms", 100)),
             ),
         )
@@ -158,6 +171,8 @@ def backtest_day(
     symbol: str,
     yyyymmdd: str,
     out_dir: Path,
+    time_min_ms: Optional[int] = None,
+    time_max_ms: Optional[int] = None,
     quote_model_name: str = "avellaneda_stoikov",
     fill_model_name: str = "trade_driven",
     # Optional overrides (used by calibration runners).
@@ -187,7 +202,7 @@ def backtest_day(
     # Filter unfundable quotes under spot constraints (cash/inventory/min-notional).
     quote_model = BalanceAwareQuoteModel(inner=quote_model, maker_fee_rate=maker_fee_rate, min_notional=min_notional)
 
-    fill_model = fill_model_override or make_fill_model(fill_model_name, params=fill_params)
+    fill_model = fill_model_override or make_fill_model(fill_model_name, params=fill_params, tick_size=tick_size)
 
     cfg = BacktestConfig(
         maker_fee_rate=maker_fee_rate,
@@ -215,7 +230,15 @@ def backtest_day(
     def on_trade(tr, engine: OrderBookSyncEngine):
         exch.on_trade(tr.recv_ms, float(tr.price), float(tr.qty), int(tr.is_buyer_maker))
 
-    stats = replay_day(root=root, symbol=symbol, yyyymmdd=yyyymmdd, on_tick=on_tick, on_trade=on_trade)
+    stats = replay_day(
+        root=root,
+        symbol=symbol,
+        yyyymmdd=yyyymmdd,
+        on_tick=on_tick,
+        on_trade=on_trade,
+        time_min_ms=time_min_ms,
+        time_max_ms=time_max_ms,
+    )
 
     exch.close()
 

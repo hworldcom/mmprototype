@@ -318,3 +318,14 @@ See `mm/backtest/README.md` for environment variables controlling latency, TTL/G
 ```bash
 pytest -q
 ```
+
+
+## Walk-forward calibration (rolling window)
+
+A rolling-window calibration + continuous backtest runner is available:
+
+```bash
+python -m mm.runner_walkforward --symbol BTCUSDT --day YYYYMMDD --data-root data --out-root out
+```
+
+See `mm/walkforward/README.md` for full details.

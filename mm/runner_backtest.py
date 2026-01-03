@@ -107,6 +107,7 @@ def main():
             "A": float(fill_params.get("A")),
             "k": float(fill_params.get("k")),
             "dt_ms": int(fill_params.get("dt_ms", 100)),
+            "tick_size": float(fill_params.get("tick_size", tick_size)),
             # allow_partial/max_fill_qty may still be supplied by user for hybrid/trade-driven
             **{k: v for k, v in fill_params.items() if k in ("allow_partial", "max_fill_qty")},
         }

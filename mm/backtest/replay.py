@@ -111,6 +111,8 @@ def replay_day(
     yyyymmdd: str,
     on_tick: Optional[Callable[[int, OrderBookSyncEngine], None]] = None,
     on_trade: Optional[Callable[[Trade, OrderBookSyncEngine], None]] = None,
+    time_min_ms: Optional[int] = None,
+    time_max_ms: Optional[int] = None,
 ) -> ReplayStats:
     """
     Reconstructs a local book and replays events in recv_ms time order.
@@ -179,9 +181,10 @@ def replay_day(
             elif result.action == "applied":
                 stats.applied += 1
 
-            # call tick hook only when valid
+            # call tick hook only when valid and within optional time window
             if engine.depth_synced and engine.snapshot_loaded and on_tick:
-                on_tick(recv_ms, engine)
+                if (time_min_ms is None or recv_ms >= time_min_ms) and (time_max_ms is None or recv_ms < time_max_ms):
+                    on_tick(recv_ms, engine)
 
             push_next(depth_it, "depth")
 
@@ -189,7 +192,8 @@ def replay_day(
             tr: Trade = item
             stats.trade_msgs += 1
             if on_trade:
-                on_trade(tr, engine)
+                if (time_min_ms is None or tr.recv_ms >= time_min_ms) and (time_max_ms is None or tr.recv_ms < time_max_ms):
+                    on_trade(tr, engine)
             push_next(trade_it, "trade")
 
     return stats
