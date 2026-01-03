@@ -22,17 +22,17 @@ class LocalOrderBook:
         self.bids.clear()
         self.asks.clear()
 
-        for p_s, q_s in bids:
-            p = float(p_s)
-            q = float(q_s)
-            if q != 0.0:
-                self.bids[p] = q
+        for price_snapshot, quantity_snapshot in bids:
+            price = float(price_snapshot)
+            quantity = float(quantity_snapshot)
+            if quantity != 0.0:
+                self.bids[price] = quantity
 
-        for p_s, q_s in asks:
-            p = float(p_s)
-            q = float(q_s)
-            if q != 0.0:
-                self.asks[p] = q
+        for price_snapshot, quantity_snapshot in asks:
+            price = float(price_snapshot)
+            quantity = float(quantity_snapshot)
+            if quantity != 0.0:
+                self.asks[price] = quantity
 
         self.last_update_id = int(last_update_id)
 
@@ -59,22 +59,22 @@ class LocalOrderBook:
             return False
 
         # apply bids
-        for p_s, q_s in bids:
-            p = float(p_s)
-            q = float(q_s)
-            if q == 0.0:
-                self.bids.pop(p, None)
+        for price_snapshot, quantity_snapshot in bids:
+            price = float(price_snapshot)
+            quantity = float(quantity_snapshot)
+            if quantity == 0.0:
+                self.bids.pop(price, None)
             else:
-                self.bids[p] = q
+                self.bids[price] = quantity
 
         # apply asks
-        for p_s, q_s in asks:
-            p = float(p_s)
-            q = float(q_s)
-            if q == 0.0:
-                self.asks.pop(p, None)
+        for price_snapshot, quantity_snapshot in asks:
+            price = float(price_snapshot)
+            quantity = float(quantity_snapshot)
+            if quantity == 0.0:
+                self.asks.pop(price, None)
             else:
-                self.asks[p] = q
+                self.asks[price] = quantity
 
         self.last_update_id = u
         return True
