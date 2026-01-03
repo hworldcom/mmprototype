@@ -69,7 +69,7 @@ class OrderBookSyncEngine:
                 continue
 
             if not self.depth_synced:
-                bridges = (U <= lu <= u) or (U <= lu + 1 <= u)
+                bridges = (U <= lu <= u) or (U <= lu + 1 <= u) # TODO: having two checks for bridges redundant, do we need or?
                 if not bridges:
                     continue
 
