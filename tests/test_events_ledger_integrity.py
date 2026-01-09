@@ -86,9 +86,10 @@ def test_events_contains_run_start_snapshot_synced(monkeypatch, tmp_path):
     # Parse events
     rows = list(csv.reader(events_path.open()))
     header = rows[0]
-    assert header == ["event_id", "recv_time_ms", "run_id", "type", "epoch_id", "details_json"]
+    assert header == ["event_id", "recv_time_ms", "recv_seq", "run_id", "type", "epoch_id", "details_json"]
 
-    types = [r[3] for r in rows[1:]]
+    # Header: event_id, recv_time_ms, recv_seq, run_id, type, epoch_id, details_json
+    types = [r[4] for r in rows[1:]]
     assert "run_start" in types
     assert "snapshot_request" in types
     assert "snapshot_loaded" in types
@@ -96,7 +97,7 @@ def test_events_contains_run_start_snapshot_synced(monkeypatch, tmp_path):
 
     # Ensure we wrote at least one orderbook row and it is in a valid epoch (>=1)
     ob_rows = list(csv.reader(orderbook_path.open()))
-    assert ob_rows[0][0:4] == ["event_time_ms", "recv_time_ms", "run_id", "epoch_id"]
+    assert ob_rows[0][0:5] == ["event_time_ms", "recv_time_ms", "recv_seq", "run_id", "epoch_id"]
     assert len(ob_rows) >= 2
     first_data_epoch = int(ob_rows[1][1])
     assert first_data_epoch >= 1

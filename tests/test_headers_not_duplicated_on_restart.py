@@ -83,10 +83,11 @@ def test_headers_written_once_across_restarts(monkeypatch, tmp_path):
         rows = list(csv.reader(path.open()))
         return sum(1 for r in rows if r == expected_header)
 
-    ob_header = ["event_time_ms", "recv_time_ms", "run_id", "epoch_id"]
+    ob_header = ["event_time_ms", "recv_time_ms", "recv_seq", "run_id", "epoch_id"]
     tr_header = [
         "event_time_ms",
         "recv_time_ms",
+        "recv_seq",
         "run_id",
         "trade_id",
         "trade_time_ms",
@@ -94,11 +95,11 @@ def test_headers_written_once_across_restarts(monkeypatch, tmp_path):
         "qty",
         "is_buyer_maker",
     ]
-    ev_header = ["event_id", "recv_time_ms", "run_id", "type", "epoch_id", "details_json"]
+    ev_header = ["event_id", "recv_time_ms", "recv_seq", "run_id", "type", "epoch_id", "details_json"]
 
     # orderbook header has extra columns beyond the first 4; compare prefix for robustness
     ob_rows = list(csv.reader(orderbook_path.open()))
-    assert ob_rows[0][:4] == ob_header
+    assert ob_rows[0][:5] == ob_header
     # ensure header row appears only once (exact match on full row)
     assert header_count(orderbook_path, ob_rows[0]) == 1
 

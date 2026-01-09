@@ -79,11 +79,11 @@ def test_appends_and_run_id_changes(monkeypatch, tmp_path):
 
     rows = list(csv.reader(ob_path.open()))
 
-    # Header begins with event_time_ms, recv_time_ms, run_id, epoch_id
-    assert rows[0][:4] == ["event_time_ms", "recv_time_ms", "run_id", "epoch_id"]
+    # Header begins with event_time_ms, recv_time_ms, recv_seq, run_id, epoch_id
+    assert rows[0][:5] == ["event_time_ms", "recv_time_ms", "recv_seq", "run_id", "epoch_id"]
 
     # We expect data rows from both runs (append mode)
-    run_ids = [r[2] for r in rows[1:] if r and r[2].isdigit()]
+    run_ids = [r[3] for r in rows[1:] if r and r[3].isdigit()]
     assert "1000" in run_ids
     assert "2000" in run_ids
     assert run_ids[0] != run_ids[-1]

@@ -13,6 +13,7 @@ from typing import Dict, Generator, Iterable, Iterator, List, Optional, Tuple
 @dataclass(frozen=True)
 class DepthDiff:
     recv_ms: int
+    recv_seq: int | None = None
     E: int
     U: int
     u: int
@@ -23,6 +24,7 @@ class DepthDiff:
 @dataclass(frozen=True)
 class Trade:
     recv_ms: int
+    recv_seq: int | None = None
     E: int
     price: float
     qty: float
@@ -35,6 +37,7 @@ class Trade:
 class EventRow:
     event_id: int
     recv_ms: int
+    recv_seq: int | None = None
     run_id: int
     type: str
     epoch_id: int
@@ -86,6 +89,7 @@ def iter_depth_diffs(path: Path) -> Iterator[DepthDiff]:
             obj = json.loads(line)
             yield DepthDiff(
                 recv_ms=int(obj["recv_ms"]),
+                recv_seq=int(obj["recv_seq"]) if "recv_seq" in obj else None,
                 E=int(obj.get("E", 0)),
                 U=int(obj["U"]),
                 u=int(obj["u"]),
@@ -100,9 +104,11 @@ def iter_trades_csv(path: Path) -> Iterator[Trade]:
         for row in r:
             trade_id = row.get("trade_id")
             trade_time_ms = row.get("trade_time_ms")
+            recv_seq = row.get("recv_seq")
             yield Trade(
                 E=int(row["event_time_ms"]),
                 recv_ms=int(row.get("recv_time_ms", row["event_time_ms"])),
+                recv_seq=int(recv_seq) if recv_seq not in (None, "") else None,
                 trade_id=int(trade_id) if trade_id not in (None, "") else None,
                 trade_time_ms=int(trade_time_ms) if trade_time_ms not in (None, "") else None,
                 price=float(row["price"]),
@@ -115,9 +121,11 @@ def iter_events_csv(path: Path) -> Iterator[EventRow]:
     with path.open("r", newline="") as f:
         r = csv.DictReader(f)
         for row in r:
+            recv_seq = row.get("recv_seq")
             yield EventRow(
                 event_id=int(row["event_id"]),
                 recv_ms=int(row["recv_time_ms"]),
+                recv_seq=int(recv_seq) if recv_seq not in (None, "") else None,
                 run_id=int(row["run_id"]),
                 type=row["type"],
                 epoch_id=int(row["epoch_id"]),

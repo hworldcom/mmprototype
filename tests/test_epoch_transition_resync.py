@@ -100,6 +100,7 @@ def test_epoch_id_increments_after_resync(monkeypatch, tmp_path):
 
     # Events should contain resync markers and show epoch progress
     ev_rows = list(csv.reader(events_path.open()))
-    types = [r[3] for r in ev_rows[1:]]
+    # Header: event_id, recv_time_ms, recv_seq, run_id, type, epoch_id, details_json
+    types = [r[4] for r in ev_rows[1:]]
     assert "resync_start" in types
     assert "resync_done" in types

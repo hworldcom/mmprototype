@@ -136,24 +136,32 @@ def replay_day(
 
     engine = OrderBookSyncEngine()
 
-    # Merge 3 iterators by recv_ms using a heap:
-    # items: (recv_ms, stream_name, payload)
-    heap = []
+    # Merge 3 iterators by (recv_ms, recv_seq) using a heap.
+    # recv_seq is a globally increasing receive sequence recorded by the recorder.
+    # If older datasets lack recv_seq, we fall back to a local monotonic sequence
+    # to ensure deterministic ordering and avoid heap tie-compare issues.
+    # items: (recv_ms, seq_key, tie_seq, stream_name, payload)
+    heap: list[tuple[int, int, int, str, object]] = []
+    tie_seq = 0
 
     def push_next(it: Iterator, name: str):
+        nonlocal tie_seq
         try:
             item = next(it)
         except StopIteration:
             return
-        recv_ms = getattr(item, "recv_ms")
-        heapq.heappush(heap, (recv_ms, name, item))
+        recv_ms = int(getattr(item, "recv_ms"))
+        recv_seq = getattr(item, "recv_seq", None)
+        seq_key = int(recv_seq) if recv_seq is not None else tie_seq
+        heapq.heappush(heap, (recv_ms, seq_key, tie_seq, name, item))
+        tie_seq += 1
 
     push_next(depth_it, "depth")
     push_next(trade_it, "trade")
     push_next(event_it, "event")
 
     while heap:
-        recv_ms, name, item = heapq.heappop(heap)
+        recv_ms, _, _, name, item = heapq.heappop(heap)
 
         if name == "event":
             ev: EventRow = item

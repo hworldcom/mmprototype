@@ -109,7 +109,8 @@ def test_recorder_writes_diffs_and_resync(monkeypatch, tmp_path):
     assert len(gaps) == 1
 
     rows = list(csv.reader(gaps[0].open()))
-    assert rows[0] == ["recv_time_ms", "run_id", "epoch_id", "event", "details"]
-    events = [r[3] for r in rows[1:]]
+    assert rows[0] == ["recv_time_ms", "recv_seq", "run_id", "epoch_id", "event", "details"]
+    # Header: recv_time_ms, recv_seq, run_id, epoch_id, event, details
+    events = [r[4] for r in rows[1:]]
     assert "resync_start" in events
     assert "resync_done" in events

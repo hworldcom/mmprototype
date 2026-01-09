@@ -96,6 +96,21 @@ def run_recorder():
 
     epoch_id = 0  # increments on each (re)sync epoch, useful for replay alignment
 
+    # Global receive sequence. This is incremented for every recorded message
+    # (depth diff, trade, and internal recorder events) so that replay can
+    # establish a deterministic total order even when recv_time_ms ties occur.
+    recv_seq = 0
+
+    def next_recv_seq() -> int:
+        nonlocal recv_seq
+        recv_seq += 1
+        return recv_seq
+
+    def next_recv_seq() -> int:
+        nonlocal recv_seq
+        recv_seq += 1
+        return recv_seq
+
     def next_event_id() -> int:
         nonlocal event_id
         event_id += 1
@@ -115,7 +130,7 @@ def run_recorder():
         return f, is_new
 
     ob_header = (
-        ["event_time_ms", "recv_time_ms", "run_id", "epoch_id"]
+        ["event_time_ms", "recv_time_ms", "recv_seq", "run_id", "epoch_id"]
         + sum(
             [
                 [f"bid{i}_price", f"bid{i}_qty", f"ask{i}_price", f"ask{i}_qty"]
@@ -127,6 +142,7 @@ def run_recorder():
     tr_header = [
         "event_time_ms",
         "recv_time_ms",
+        "recv_seq",
         "run_id",
         "trade_id",
         "trade_time_ms",
@@ -158,11 +174,11 @@ def run_recorder():
     ev_w = csv.writer(ev_f)
 
     if gap_new:
-        gap_w.writerow(["recv_time_ms", "run_id", "epoch_id", "event", "details"])
+        gap_w.writerow(["recv_time_ms", "recv_seq", "run_id", "epoch_id", "event", "details"])
         gap_f.flush()
 
     if ev_new:
-        ev_w.writerow(["event_id", "recv_time_ms", "run_id", "type", "epoch_id", "details_json"])
+        ev_w.writerow(["event_id", "recv_time_ms", "recv_seq", "run_id", "type", "epoch_id", "details_json"])
         ev_f.flush()
     diff_writer: BufferedTextWriter | None = None
     if STORE_DEPTH_DIFFS:
@@ -206,14 +222,16 @@ def run_recorder():
 
         eid = next_event_id()
         ts_recv_ms = int(time.time() * 1000)
+        ts_recv_seq = next_recv_seq()
         details_s = json.dumps(details, ensure_ascii=False) if isinstance(details, dict) else str(details)
-        ev_w.writerow([eid, ts_recv_ms, run_id, ev_type, epoch_id, details_s])
+        ev_w.writerow([eid, ts_recv_ms, ts_recv_seq, run_id, ev_type, epoch_id, details_s])
         ev_f.flush()
         return eid
 
     def write_gap(event: str, details: str):
         ts_recv_ms = int(time.time() * 1000)
-        gap_w.writerow([ts_recv_ms, run_id, epoch_id, event, details])
+        ts_recv_seq = next_recv_seq()
+        gap_w.writerow([ts_recv_ms, ts_recv_seq, run_id, epoch_id, event, details])
         gap_f.flush()
 
     def heartbeat(force: bool = False):
@@ -311,13 +329,13 @@ def run_recorder():
         write_gap("resync_done", f"tag={tag} lastUpdateId={engine.lob.last_update_id}")
         emit_event("resync_done", {"tag": tag, "lastUpdateId": engine.lob.last_update_id})
 
-    def write_topn(event_time_ms: int, recv_ms: int):
+    def write_topn(event_time_ms: int, recv_ms: int, recv_seq: int):
         nonlocal ob_rows_written
         bids, asks = engine.lob.top_n(DEPTH_LEVELS)
         bids += [(0.0, 0.0)] * (DEPTH_LEVELS - len(bids))
         asks += [(0.0, 0.0)] * (DEPTH_LEVELS - len(asks))
 
-        row = [event_time_ms, recv_ms, run_id, epoch_id]
+        row = [event_time_ms, recv_ms, recv_seq, run_id, epoch_id]
         for i in range(DEPTH_LEVELS):
             bp, bq = bids[i]
             ap, aq = asks[i]
@@ -365,6 +383,8 @@ def run_recorder():
     def on_depth(data, recv_ms: int):
         nonlocal depth_msg_count, last_depth_event_ms
 
+        msg_recv_seq = next_recv_seq()
+
         depth_msg_count += 1
         last_depth_event_ms = int(data.get("E", 0))
 
@@ -373,6 +393,7 @@ def run_recorder():
             try:
                 minimal = {
                     "recv_ms": recv_ms,
+                    "recv_seq": msg_recv_seq,
                     "E": int(data.get("E", 0)),
                     "U": int(data.get("U", 0)),
                     "u": int(data.get("u", 0)),
@@ -398,7 +419,7 @@ def run_recorder():
                 return
 
             if result.action in ("synced", "applied") and engine.depth_synced:
-                write_topn(event_time_ms=int(data.get("E", 0)), recv_ms=recv_ms)
+                write_topn(event_time_ms=int(data.get("E", 0)), recv_ms=recv_ms, recv_seq=msg_recv_seq)
 
             if result.action == "buffered":
                 warn_not_synced()
@@ -415,11 +436,14 @@ def run_recorder():
         trade_msg_count += 1
         last_trade_event_ms = int(data.get("E", 0))
 
+        msg_recv_seq = next_recv_seq()
+
         try:
             tr_writer.write_row(
                 [
                     int(data.get("E", 0)),
                     recv_ms,
+                    msg_recv_seq,
                     run_id,
                     int(data.get("t", 0)),
                     int(data.get("T", 0)),
