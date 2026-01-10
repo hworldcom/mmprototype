@@ -8,6 +8,7 @@ from typing import Optional, Dict, Any
 
 from mm.backtest.paper_exchange import PaperExchange, BacktestConfig
 from mm.backtest.quotes.base import MarketState
+from mm.backtest.strategy_snapshot import StrategySnapshot, build_topn_book_from_levels
 from mm.backtest.replay import replay_day
 from mm.market_data.sync_engine import OrderBookSyncEngine
 
@@ -225,7 +226,17 @@ def backtest_day(
         ms = _market_state_from_engine(recv_ms, engine)
         if ms is None:
             return
-        exch.on_tick(ms)
+        # Stable snapshot for strategies (avoid exposing mutable engine).
+        recv_seq = int(getattr(engine, 'last_recv_seq', 0) or 0)
+        pos = exch.position()
+        book_topn = None
+        try:
+            bids, asks = engine.lob.top_n(10)
+            book_topn = build_topn_book_from_levels(bids, asks)
+        except Exception:
+            book_topn = None
+        snapshot = StrategySnapshot(recv_ms=int(recv_ms), recv_seq=recv_seq, market=ms, position=pos, book_topn=book_topn)
+        exch.on_snapshot(snapshot)
 
     def on_trade(tr, engine: OrderBookSyncEngine):
         exch.on_trade(tr.recv_ms, float(tr.price), float(tr.qty), int(tr.is_buyer_maker))

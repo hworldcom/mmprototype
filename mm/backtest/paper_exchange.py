@@ -10,6 +10,7 @@ from typing import Dict, Optional, Tuple, List
 
 from mm.backtest.quotes.base import MarketState, PositionState, Quote, QuoteModel
 from mm.backtest.fills.base import OpenOrder, FillModel, Fill
+from mm.backtest.strategy_snapshot import StrategySnapshot
 
 
 logger = logging.getLogger(__name__)
@@ -374,14 +375,21 @@ class PaperExchange:
     # Tick/trade handlers
     # ---------------------------
 
-    def maybe_quote(self, market: MarketState):
+    def maybe_quote(self, market: MarketState, snapshot: StrategySnapshot | None = None):
         now = market.recv_ms
         if self.last_quote_ms is not None and (now - self.last_quote_ms) < int(self.cfg.quote_interval_ms):
             return
         self.last_quote_ms = now
 
         # 1) Compute desired quotes from the strategy.
-        quotes = self.quote_model.generate_quotes(market, self.position())
+        # Support both legacy (market, position) and snapshot-based strategies.
+        if snapshot is not None:
+            try:
+                quotes = self.quote_model.generate_quotes(snapshot)  # type: ignore[arg-type]
+            except TypeError:
+                quotes = self.quote_model.generate_quotes(market, snapshot.position)
+        else:
+            quotes = self.quote_model.generate_quotes(market, self.position())
         logger.debug("GENERATE_QUOTES recv_ms=%d mid=%.8f n_quotes=%d", now, market.mid, len(quotes))
         desired_by_side: Dict[str, Quote] = {}
         for q in quotes:
@@ -518,7 +526,9 @@ class PaperExchange:
                 self._log_order(now_ms, oid, "CANCEL_ACK", st)
                 self.open_orders.pop(oid, None)
 
-    def on_tick(self, market: MarketState):
+
+    def on_snapshot(self, snapshot: StrategySnapshot):
+        market = snapshot.market
         now = market.recv_ms
 
         # 1) Generate fills first (orders might still be live during cancel latency)
@@ -531,12 +541,17 @@ class PaperExchange:
         self._expire_and_cancel_ack(now)
 
         # 3) Quote (cancel/replace)
-        self.maybe_quote(market)
+        self.maybe_quote(market, snapshot=snapshot)
 
         # 4) Snapshot state
         mtm = self.cash + self.inventory * market.mid
         self.state_w.writerow([market.recv_ms, f"{self.inventory:.8f}", f"{self.cash:.8f}", f"{market.mid:.8f}", f"{mtm:.8f}", len(self.open_orders)])
         self._state_f.flush()
+
+    def on_tick(self, market: MarketState):
+        # Backwards-compatible adapter for legacy code/tests.
+        snap = StrategySnapshot(recv_ms=market.recv_ms, recv_seq=0, market=market, position=self.position(), book_topn=None)
+        self.on_snapshot(snap)
 
     def on_trade(self, recv_ms: int, price: float, qty: float, is_buyer_maker: int):
         # Trade-driven fills

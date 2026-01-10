@@ -177,6 +177,11 @@ def replay_day(
 
         elif name == "depth":
             dd: DepthDiff = item
+            # Propagate global ordering into the engine for downstream consumers.
+            try:
+                engine.last_recv_seq = int(getattr(dd, 'recv_seq'))
+            except Exception:
+                engine.last_recv_seq = None
             stats.depth_msgs += 1
             result = engine.feed_depth_event(
                 {"E": dd.E, "U": dd.U, "u": dd.u, "b": dd.b, "a": dd.a}

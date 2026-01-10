@@ -26,6 +26,7 @@ from .ws_stream import BinanceWSStream
 from .sync_engine import OrderBookSyncEngine
 from .snapshot import record_rest_snapshot
 from .buffered_writer import BufferedCSVWriter, BufferedTextWriter
+from .schema import write_schema, SCHEMA_VERSION
 
 ORIGINAL_RECORD_REST_SNAPSHOT = record_rest_snapshot
 
@@ -106,11 +107,6 @@ def run_recorder():
         recv_seq += 1
         return recv_seq
 
-    def next_recv_seq() -> int:
-        nonlocal recv_seq
-        recv_seq += 1
-        return recv_seq
-
     def next_event_id() -> int:
         nonlocal event_id
         event_id += 1
@@ -150,6 +146,42 @@ def run_recorder():
         "qty",
         "is_buyer_maker",
     ]
+
+
+
+
+    # Write per-day schema metadata for controlled format evolution.
+    # This file is overwritten on each recorder start to reflect current schema.
+    schema_path = day_dir / "schema.json"
+    files_schema = {
+        "orderbook_ws_depth_csv": {
+            "path": str(ob_path.name),
+            "format": "csv",
+            "columns": ob_header,
+        },
+        "trades_ws_csv": {
+            "path": str(tr_path.name),
+            "format": "csv",
+            "columns": tr_header,
+        },
+        "gaps_csv": {
+            "path": str(gap_path.name),
+            "format": "csv",
+            "columns": ["recv_time_ms", "recv_seq", "run_id", "epoch_id", "event", "details"],
+        },
+        "events_csv": {
+            "path": str(ev_path.name),
+            "format": "csv",
+            "columns": ["event_id", "recv_time_ms", "recv_seq", "run_id", "type", "epoch_id", "details_json"],
+        },
+    }
+    if STORE_DEPTH_DIFFS:
+        files_schema["depth_diffs_ndjson_gz"] = {
+            "path": f"diffs/depth_diffs_{symbol}_{day_str}.ndjson.gz",
+            "format": "ndjson.gz",
+            "fields": ["recv_ms", "recv_seq", "E", "U", "u", "b", "a"],
+        }
+    write_schema(schema_path, files_schema)
 
     ob_writer = BufferedCSVWriter(
         ob_path,

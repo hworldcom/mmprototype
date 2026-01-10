@@ -207,7 +207,7 @@ Realism:
 
 Constraints / balances:
 - `TICK_SIZE` (default: `0.01`)
-- `QTY_STEP` (default: `0.0`)
+- `QTY_STEP` (default: `0.0`) 
 - `MIN_NOTIONAL` (default: `0.0`)
 - `INITIAL_CASH` (default: `0.0`)
 - `INITIAL_INVENTORY` (default: `0.0`)

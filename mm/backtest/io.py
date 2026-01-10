@@ -13,40 +13,35 @@ from typing import Dict, Generator, Iterable, Iterator, List, Optional, Tuple
 @dataclass(frozen=True)
 class DepthDiff:
     recv_ms: int
-    recv_seq: int | None = None
     E: int
     U: int
     u: int
     b: list
     a: list
+    recv_seq: int | None = None
 
 
 @dataclass(frozen=True)
 class Trade:
     recv_ms: int
-    recv_seq: int | None = None
     E: int
     price: float
     qty: float
     is_buyer_maker: int
     trade_id: int | None = None
     trade_time_ms: int | None = None
+    recv_seq: int | None = None
 
 
 @dataclass(frozen=True)
 class EventRow:
     event_id: int
     recv_ms: int
-    recv_seq: int | None = None
     run_id: int
     type: str
     epoch_id: int
     details_json: str
-
-
-def day_dir(root: Path, symbol: str, yyyymmdd: str) -> Path:
-    return root / symbol.upper() / yyyymmdd
-
+    recv_seq: int | None = None
 
 def find_depth_diffs_file(root: Path, symbol: str, yyyymmdd: str) -> Path:
     ddir = day_dir(root, symbol, yyyymmdd) / "diffs"

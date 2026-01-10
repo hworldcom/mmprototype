@@ -30,6 +30,8 @@ class OrderBookSyncEngine:
         self.snapshot_loaded: bool = False
         self.depth_synced: bool = False
         self.buffer: List[dict] = []
+        # Updated by replay/recorder to carry global ordering through callbacks.
+        self.last_recv_seq: Optional[int] = None
 
     def adopt_snapshot(self, lob: LocalOrderBook) -> None:
         """Adopt a fully-loaded snapshot book. Resets sync state but keeps buffered events."""
