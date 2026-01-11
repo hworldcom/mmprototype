@@ -43,6 +43,14 @@ class EventRow:
     details_json: str
     recv_seq: int | None = None
 
+
+def day_dir(root: Path, symbol: str, yyyymmdd: str) -> Path:
+    """
+    Return the directory containing all data for a given symbol and day.
+    """
+    return Path(root) / symbol / yyyymmdd
+
+
 def find_depth_diffs_file(root: Path, symbol: str, yyyymmdd: str) -> Path:
     ddir = day_dir(root, symbol, yyyymmdd) / "diffs"
     # expected: depth_diffs_SYMBOL_YYYYMMDD.ndjson.gz
