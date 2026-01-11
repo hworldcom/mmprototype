@@ -18,6 +18,7 @@ import argparse
 import json
 import logging
 import os
+import time
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -165,6 +166,10 @@ def _calibrate_poisson_window(
     return fit_out
 
 
+
+def _fmt_hhmm(ms: int) -> str:
+    """Format a unix epoch timestamp in milliseconds as HH:MM (UTC)."""
+    return datetime.utcfromtimestamp(ms / 1000.0).strftime('%H:%M')
 def build_schedule(
     *,
     data_root: Path,
@@ -205,6 +210,12 @@ def build_schedule(
     if offset:
         t += (step_ms - offset)
 
+
+    # Progress tracking (Mode B schedule-only).
+    t0 = int(t)
+    n_steps = int(((day_end_ms - t0) + step_ms - 1) // step_ms) if day_end_ms > t0 else 0
+    step_idx = 0
+    t_wall0 = time.time()
     schedule: List[Dict[str, Any]] = []
     last_good: Optional[Dict[str, Any]] = None
 
@@ -276,8 +287,29 @@ def build_schedule(
                 "n_deltas_usable": int(fit.get("n_deltas_usable", 0)),
             }
         )
+
+        # One-line progress summary per segment.
+        step_idx += 1
+        if n_steps > 0:
+            pct = 100.0 * float(step_idx) / float(n_steps)
+        else:
+            pct = 100.0
+        log.info(
+            "[CALIB] %5.1f%% (%d/%d) %s–%s usable=%s A=%.6g k=%.6g reason=%s",
+            pct,
+            step_idx,
+            n_steps,
+            _fmt_hhmm(seg_start),
+            _fmt_hhmm(seg_end),
+            bool(usable),
+            float(A),
+            float(k),
+            str(reason),
+        )
         t += step_ms
 
+
+    log.info("[CALIB] 100.0%% (%d/%d) completed in %.1fs", n_steps, n_steps, time.time() - t_wall0)
     return schedule
 
 
