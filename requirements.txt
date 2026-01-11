@@ -3,6 +3,7 @@ pandas
 scipy
 pyyaml
 python-binance==1.0.34
-websockets<14
+websockets>=12,<14
+websocket-client>=1.6,<2
 certifi
 pytest
