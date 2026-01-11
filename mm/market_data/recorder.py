@@ -78,18 +78,18 @@ def run_recorder():
     log.info("Recorder logging to %s", log_path)
 
     # Recording window in Berlin time (8:00 -> 22:00)
-    start = berlin_now().replace(hour=8, minute=0, second=0, microsecond=0)
-    end = berlin_now().replace(hour=22, minute=0, second=0, microsecond=0)
+    #start = berlin_now().replace(hour=8, minute=0, second=0, microsecond=0)
+    #end = berlin_now().replace(hour=22, minute=0, second=0, microsecond=0)
 
-    now = berlin_now()
-    if now > end:
-        log.info("Now is past end of window (%s). Exiting.", end.isoformat())
-        return
+    #now = berlin_now()
+    #if now > end:
+    #    log.info("Now is past end of window (%s). Exiting.", end.isoformat())
+    #    return
 
-    if now < start:
-        sleep_s = (start - now).total_seconds()
-        log.info("Before start window. Sleeping %.1fs until %s.", sleep_s, start.isoformat())
-        time.sleep(max(0.0, sleep_s))
+    #if now < start:
+    #    sleep_s = (start - now).total_seconds()
+    #    log.info("Before start window. Sleeping %.1fs until %s.", sleep_s, start.isoformat())
+    #    time.sleep(max(0.0, sleep_s))
 
     # Run-scoped ids for audit and file naming
     run_id = int(time.time() * 1000)
@@ -437,10 +437,10 @@ def run_recorder():
                 log.exception("Failed writing depth diffs")
 
         # Stop at end of window
-        if berlin_now() >= end:
-            emit_event("window_end", {"end": end.isoformat()})
-            stream.close()
-            return
+        #if berlin_now() >= end:
+        #    emit_event("window_end", {"end": end.isoformat()})
+        #    stream.close()
+        #    return
 
         try:
             result = engine.feed_depth_event(data)

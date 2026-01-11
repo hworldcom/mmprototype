@@ -294,6 +294,37 @@ python -m mm.calibration.runner_calibration \
   --fit-method poisson_mle
 ```
 
+### Rolling schedule (Mode B)
+
+If you want a **time-varying** Poisson parameter schedule (e.g. a new `(A,k)` every 15 minutes, each fit on the prior 2 hours),
+use the schedule-only runner. This produces a reusable artifact and does **not** run any quoting strategy backtest:
+
+```bash
+python -m mm.runner_calibrate_schedule \
+  --symbol BTCUSDT \
+  --day 20251216 \
+  --data-root data \
+  --out-root out \
+  --tick-size 0.01 \
+  --train-window-min 120 \
+  --step-min 15 \
+  --deltas 1,2,3,5,8,13 \
+  --dwell-ms 60000 \
+  --fit-method poisson_mle
+```
+
+Outputs:
+
+```
+out/calibration/schedules/<SYMBOL>/<DAY>_<RUN_ID>/
+  poisson_schedule.json
+  window_metrics.csv
+  manifest.json
+  calibration_windows/...
+```
+
+Use `calibration_schedule_qa.ipynb` to QA coverage and parameter stability.
+
 ### Using calibration outputs in backtests
 
 Point the backtest runner at the `poisson_fit.json` file:

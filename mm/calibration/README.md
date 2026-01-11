@@ -92,6 +92,43 @@ python -m mm.calibration.runner_calibration
 
 ---
 
+## Rolling schedule calibration (Mode B)
+
+If you want **time-varying Poisson parameters** over a day (e.g., a new `(A,k)` every 15 minutes, each fit on the prior 2 hours),
+use the schedule-only runner. This produces a reusable artifact without running any quoting strategy backtest.
+
+```bash
+python -m mm.runner_calibrate_schedule \
+  --symbol BTCUSDT \
+  --day 20250101 \
+  --data-root data \
+  --out-root out \
+  --tick-size 0.01 \
+  --train-window-min 120 \
+  --step-min 15 \
+  --deltas 1,2,3,5,8,13 \
+  --dwell-ms 60000 \
+  --mid-move-threshold-ticks 2 \
+  --min-exposure-s 5.0 \
+  --max-delta-ticks 50
+```
+
+Outputs are written to:
+
+```
+out/calibration/schedules/<SYMBOL>/<YYYYMMDD>_<RUN_ID>/
+  poisson_schedule.json
+  window_metrics.csv
+  manifest.json
+  calibration_windows/
+    train_<start_ms>_<end_ms>/...
+```
+
+The included notebook `calibration_schedule_qa.ipynb` can be used to QA the schedule (coverage, parameter stability, implied fill rates)
+and optionally correlate it with market metrics from the trades stream.
+
+---
+
 ## Calibration outputs
 
 Each calibration run creates a timestamped folder like:
