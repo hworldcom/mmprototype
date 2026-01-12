@@ -135,7 +135,7 @@ class PaperExchange:
         ])
 
         logger.info(
-            "PaperExchange init symbol=%s fee=%.6f order_lat=%dms cancel_lat=%dms quote_interval=%dms ttl_ms=%s refresh_ms=%s tick=%.10f qty_step=%.10f min_notional=%.8f initial_cash=%.8f initial_inv=%.8f",
+            "PaperExchange init symbol=%s fee=%.6f order_lat=%dms cancel_lat=%dms quote_interval=%dms ttl_ms=%s refresh_ms=%s tick=%.10f qty_step=%.10f min_notional=%.8f initial_cash=%.8f initial_inv=%.8f enforce_balances=%s suppress_unfunded_quotes=%s",
             self.symbol,
             float(cfg.maker_fee_rate),
             int(cfg.order_latency_ms),
@@ -148,6 +148,8 @@ class PaperExchange:
             float(cfg.min_notional),
             float(cfg.initial_cash),
             float(cfg.initial_inventory),
+            str(cfg.enforce_balances),
+            str(cfg.suppress_unfunded_quotes),
         )
 
     def close(self):

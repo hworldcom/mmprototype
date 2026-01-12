@@ -96,6 +96,26 @@ def _calibrate_poisson_window(
     )
 
     # We backtest with a trade-driven fill model to observe "probe" fills.
+    # Calibration probes are measurement instruments. To avoid one-sided placement caused by
+    # spot balance constraints (e.g., no inventory => SELL suppressed), we ensure sufficiently
+    # large starting balances when running two-sided ladder probes.
+    calib_initial_cash = initial_cash
+    calib_initial_inventory = initial_inventory
+    if getattr(quote_model, "two_sided", False):
+        # Cash must cover repeated BUY probe fills; inventory must cover SELL probe placement.
+        min_cash = 1e6
+        min_inv = max(quote_qty * max(100, 10 * len(deltas)), quote_qty)
+        if calib_initial_cash < min_cash or calib_initial_inventory < min_inv:
+            log.info(
+                "Calibration two-sided probe: overriding balances initial_cash=%.6f->%.6f initial_inv=%.6f->%.6f",
+                calib_initial_cash,
+                max(calib_initial_cash, min_cash),
+                calib_initial_inventory,
+                max(calib_initial_inventory, min_inv),
+            )
+        calib_initial_cash = max(calib_initial_cash, min_cash)
+        calib_initial_inventory = max(calib_initial_inventory, min_inv)
+
     stats = backtest_day(
         root=data_root,
         symbol=symbol,
@@ -115,8 +135,8 @@ def _calibrate_poisson_window(
         order_ttl_ms=None,
         refresh_interval_ms=None,
         tick_size=tick_size,
-        initial_cash=initial_cash,
-        initial_inventory=initial_inventory,
+        initial_cash=calib_initial_cash,
+        initial_inventory=calib_initial_inventory,
     )
 
     points = compute_bucketed_exposure(
@@ -236,8 +256,8 @@ def build_schedule(
             order_latency_ms=order_latency_ms,
             cancel_latency_ms=cancel_latency_ms,
             requote_interval_ms=requote_interval_ms,
-            initial_cash=initial_cash,
-            initial_inventory=initial_inventory,
+            initial_cash=calib_initial_cash,
+            initial_inventory=calib_initial_inventory,
             deltas=deltas,
             dwell_ms=dwell_ms,
             mid_move_threshold_ticks=mid_move_threshold_ticks,
