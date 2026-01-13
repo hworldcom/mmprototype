@@ -81,7 +81,9 @@ def run_recorder():
     start = berlin_now().replace(hour=8, minute=0, second=0, microsecond=0)
     end = berlin_now().replace(hour=22, minute=0, second=0, microsecond=0)
 
-    #now = berlin_now()
+    # Current wall-clock time (Berlin). Used to decide whether to sleep until
+    # the recording window starts.
+    now = berlin_now()
     if now > end:
         log.info("Now is past end of window (%s). Exiting.", end.isoformat())
         return
@@ -559,7 +561,13 @@ def run_recorder():
 
 
 def main():
-    run_recorder()
+    # Ensure we always surface exceptions in logs (both file and stdout).
+    # In cron/docker contexts stderr may be discarded, so we log the traceback.
+    try:
+        run_recorder()
+    except Exception:
+        logging.getLogger("market_data.recorder").exception("Recorder crashed")
+        raise
 
 
 if __name__ == "__main__":
