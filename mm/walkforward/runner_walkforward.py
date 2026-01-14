@@ -16,7 +16,7 @@ from mm.backtest.backtester import backtest_day, BacktestRunStats
 from mm.backtest.io import find_trades_file, iter_trades_csv
 from mm.backtest.fills.trade_driven import TradeDrivenFillModel
 from mm.backtest.fills.poisson import TimeVaryingPoissonFillModel
-from mm.calibration.exposure import compute_bucketed_exposure
+from mm.calibration.exposure import compute_bucketed_exposure, summarize_bucketed_exposure
 from mm.calibration.poisson_fit import fit_poisson_mle, fit_log_linear
 from mm.calibration.quotes.calibration_ladder import CalibrationLadderQuoteModel
 from mm.logging_config import setup_run_logging
@@ -119,9 +119,23 @@ def _calibrate_poisson_window(
     )
     points.to_csv(out_dir / "calibration_points.csv", index=False)
 
+    summary = summarize_bucketed_exposure(points)
+
     fit_df = points[points["usable"]].copy()
     if fit_df.empty:
-        return {"usable": False, "reason": "no_usable_points"}
+        # For QA/monitoring: include totals even if no usable points.
+        return {
+            "usable": False,
+            "reason": "no_usable_points",
+            "dt_ms": int(poisson_dt_ms),
+            "tick_size": float(tick_size),
+            "train_start_ms": int(time_min_ms),
+            "train_end_ms": int(time_max_ms),
+            "exposure_s_total": float(summary["exposure_s_total"]),
+            "fills_total": int(summary["fills_total"]),
+            "fills_usable_total": int(summary["fills_usable_total"]),
+            "n_deltas_usable": int(summary["n_deltas_usable"]),
+        }
 
     if fit_method == "log_linear":
         fit = fit_log_linear(fit_df)
@@ -137,6 +151,8 @@ def _calibrate_poisson_window(
         "tick_size": float(tick_size),
         "train_start_ms": int(time_min_ms),
         "train_end_ms": int(time_max_ms),
+        "exposure_s_total": float(summary["exposure_s_total"]),
+        "fills_total": int(summary["fills_total"]),
     }
     _write_json(out_dir / "poisson_fit.json", fit_out)
     return fit_out

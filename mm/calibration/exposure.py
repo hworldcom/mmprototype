@@ -184,3 +184,40 @@ def compute_run_level_exposure(
         "filled_qty": filled_qty,
         "lambda_events_per_s": (fill_events / exposure_s) if exposure_s > 0 else float("nan"),
     }
+
+
+def summarize_bucketed_exposure(points: pd.DataFrame) -> Dict[str, float | int]:
+    """Summarize totals from the bucketed exposure dataframe.
+
+    The calibration pipeline historically used different column names for fill counts.
+    Newer versions use `fill_events`; older may have used `n_fills`.
+    This helper computes a consistent set of summary metrics and avoids
+    silently returning zeros when columns change.
+    """
+    if points is None or points.empty:
+        return {
+            "exposure_s_total": 0.0,
+            "fills_total": 0,
+            "fills_usable_total": 0,
+            "n_deltas_usable": 0,
+        }
+
+    cols = set(points.columns)
+    fills_col = "fill_events" if "fill_events" in cols else ("n_fills" if "n_fills" in cols else None)
+
+    exposure_total = float(points["exposure_s"].sum()) if "exposure_s" in cols else 0.0
+    fills_total = int(points[fills_col].sum()) if fills_col else 0
+
+    if "usable" in cols and fills_col:
+        fills_usable_total = int(points.loc[points["usable"].astype(bool), fills_col].sum())
+        n_usable = int(points["usable"].astype(bool).sum())
+    else:
+        fills_usable_total = 0
+        n_usable = 0
+
+    return {
+        "exposure_s_total": exposure_total,
+        "fills_total": fills_total,
+        "fills_usable_total": fills_usable_total,
+        "n_deltas_usable": n_usable,
+    }
