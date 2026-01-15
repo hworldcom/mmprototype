@@ -129,6 +129,90 @@ and optionally correlate it with market metrics from the trades stream.
 
 ---
 
+## Running schedule calibration in Docker
+
+If you are running calibration on a server (and want it to survive SSH disconnects), Docker is a good default. The key points:
+
+- mount `data/` (input) into the container
+- mount `out/` (outputs and logs) out of the container
+- pass the same CLI flags you would locally
+
+Example (Mode B, schedule-only):
+
+```bash
+# From repo root
+docker build -t mm-calibration:latest .
+
+docker run --rm \
+  -e LOG_LEVEL=INFO \
+  -v "$PWD/data":/app/data:ro \
+  -v "$PWD/out":/app/out \
+  mm-calibration:latest \
+  python -m mm.runner_calibrate_schedule \
+    --symbol BTCUSDT \
+    --day 20250101 \
+    --data-root /app/data \
+    --out-root /app/out \
+    --tick-size 0.01 \
+    --train-window-min 120 \
+    --step-min 15 \
+    --deltas 1,2,3,5,8,13 \
+    --dwell-ms 60000 \
+    --mid-move-threshold-ticks 2
+```
+
+### Where to find logs
+
+Schedule calibration writes run-scoped logs under:
+
+```
+out/logs/calibration/schedule_only/<SYMBOL>/<YYYYMMDD>/<RUN_ID>/run.log
+```
+
+---
+
+## Troubleshooting
+
+### Docker build fails: `archive/tar: write too long`
+
+This usually means Docker is trying to include large artifacts (especially `out/` or `data/`) in the build context.
+
+Actions:
+- ensure `.dockerignore` excludes `out/`, `data/`, `logs/`, and other large folders
+- run `docker build` from the repo root (so `.dockerignore` is applied)
+
+### Calibration runs but produces no output
+
+Checklist:
+- confirm mounts: `-v "$PWD/data":/app/data` and `-v "$PWD/out":/app/out`
+- confirm the day exists under `data/<SYMBOL>/<YYYYMMDD>/...`
+- confirm the container logs: `docker logs <container>`
+
+### Calibration appears “stuck” / no progress logs
+
+Progress logs are printed per window step; depending on your data volume and deltas, the first window can take several minutes.
+
+If it takes much longer than expected, inspect:
+- `out/logs/.../run.log` for exceptions or repeated warnings
+- your `deltas` list (more deltas increases computation)
+- `train-window-min` (longer windows cost more)
+
+---
+
+## Performance note and next step (virtual probes)
+
+The current schedule calibration path can be computationally heavy because it runs many small “paper backtests” per window.
+
+The planned optimization is a **virtual-probe calibration engine**:
+
+- no orders are sent to a `PaperExchange`
+- probes are conceptual quotes at `(mid ± δ*tick)` held for a dwell time
+- fills are counted directly from trade-cross events while probes are active
+
+This keeps the Poisson statistics (hits/exposure) but removes most of the order-management overhead.
+
+---
+
 ## Calibration outputs
 
 Each calibration run creates a timestamped folder like:
