@@ -32,6 +32,7 @@ from mm.backtest.backtester import backtest_day
 from mm.calibration.exposure import compute_bucketed_exposure, summarize_bucketed_exposure
 from mm.calibration.poisson_fit import fit_poisson_mle, fit_log_linear
 from mm.calibration.quotes.calibration_ladder import CalibrationLadderQuoteModel
+from mm.calibration.virtual_probes import run_virtual_ladder_window
 from mm.logging_config import setup_run_logging
 
 log = logging.getLogger(__name__)
@@ -82,64 +83,90 @@ def _calibrate_poisson_window(
     time_min_ms: int,
     time_max_ms: int,
     out_dir: Path,
+    calib_engine: str = "paper",
 ) -> Dict[str, Any]:
     """Run a controlled ladder sweep in [time_min_ms, time_max_ms) and fit A,k."""
     _ensure_dir(out_dir)
 
-    quote_model = CalibrationLadderQuoteModel(
-        qty=quote_qty,
-        tick_size=tick_size,
-        deltas=deltas,
-        dwell_ms=dwell_ms,
-        mid_move_threshold_ticks=mid_move_threshold_ticks,
-        two_sided=True,
-    )
+    calib_engine = str(calib_engine or "paper").strip().lower()
+    if calib_engine not in {"paper", "virtual"}:
+        raise ValueError(f"Unknown calib_engine={calib_engine!r} (expected 'paper' or 'virtual')")
 
-    # We backtest with a trade-driven fill model to observe "probe" fills.
+    if calib_engine == "virtual":
+        # Order-free virtual probes. Significantly cheaper than placing/cancelling
+        # simulated orders.
+        res = run_virtual_ladder_window(
+            data_root=data_root,
+            symbol=symbol,
+            yyyymmdd=yyyymmdd,
+            tick_size=tick_size,
+            deltas=deltas,
+            dwell_ms=dwell_ms,
+            mid_move_threshold_ticks=mid_move_threshold_ticks,
+            time_min_ms=time_min_ms,
+            time_max_ms=time_max_ms,
+            max_delta_ticks=max(max_delta_ticks, max(deltas)),
+            min_exposure_s=min_exposure_s,
+        )
+        points = res.points
+        points.to_csv(out_dir / "calibration_points.csv", index=False)
+        summary = res.stats
+        _write_json(out_dir / "virtual_probe_stats.json", summary)
+    else:
+        quote_model = CalibrationLadderQuoteModel(
+            qty=quote_qty,
+            tick_size=tick_size,
+            deltas=deltas,
+            dwell_ms=dwell_ms,
+            mid_move_threshold_ticks=mid_move_threshold_ticks,
+            two_sided=True,
+        )
 
-    # Calibration runs need two-sided probes to be placeable even on spot.
-    # If initial_inventory is 0 and PaperExchange is configured to suppress unfunded quotes,
-    # the first SELL probe can be suppressed, biasing the ladder. We therefore apply
-    # calibration-only "funding" floors that are comfortably above probe usage.
-    calib_initial_cash = max(float(initial_cash or 0.0), 1e6)
-    _calib_min_inv = float(quote_qty) * max(100.0, 10.0 * float(len(deltas)))
-    calib_initial_inventory = max(float(initial_inventory or 0.0), _calib_min_inv)
+        # We backtest with a trade-driven fill model to observe "probe" fills.
 
-    stats = backtest_day(
-        root=data_root,
-        symbol=symbol,
-        yyyymmdd=yyyymmdd,
-        out_dir=out_dir,
-        time_min_ms=time_min_ms,
-        time_max_ms=time_max_ms,
-        quote_model_name="avellaneda_stoikov",  # ignored due to override
-        fill_model_name="trade_driven",
-        quote_model_override=quote_model,
-        fill_model_override=TradeDrivenFillModel(allow_partial=True, max_fill_qty=1e18),
-        quote_qty=quote_qty,
-        maker_fee_rate=maker_fee_rate,
-        order_latency_ms=order_latency_ms,
-        cancel_latency_ms=cancel_latency_ms,
-        requote_interval_ms=requote_interval_ms,
-        order_ttl_ms=None,
-        refresh_interval_ms=None,
-        tick_size=tick_size,
-        initial_cash=calib_initial_cash,
-        initial_inventory=calib_initial_inventory,
-    )
+        # Calibration runs need two-sided probes to be placeable even on spot.
+        # If initial_inventory is 0 and PaperExchange is configured to suppress unfunded quotes,
+        # the first SELL probe can be suppressed, biasing the ladder. We therefore apply
+        # calibration-only "funding" floors that are comfortably above probe usage.
+        calib_initial_cash = max(float(initial_cash or 0.0), 1e6)
+        _calib_min_inv = float(quote_qty) * max(100.0, 10.0 * float(len(deltas)))
+        calib_initial_inventory = max(float(initial_inventory or 0.0), _calib_min_inv)
 
-    points = compute_bucketed_exposure(
-        orders_path=Path(stats.orders_path),
-        fills_path=Path(stats.fills_path),
-        state_path=Path(stats.state_path),
-        tick_size=tick_size,
-        min_delta_ticks=min(deltas),
-        max_delta_ticks=max(max_delta_ticks, max(deltas)),
-        min_exposure_s=min_exposure_s,
-    )
-    points.to_csv(out_dir / "calibration_points.csv", index=False)
+        stats = backtest_day(
+            root=data_root,
+            symbol=symbol,
+            yyyymmdd=yyyymmdd,
+            out_dir=out_dir,
+            time_min_ms=time_min_ms,
+            time_max_ms=time_max_ms,
+            quote_model_name="avellaneda_stoikov",  # ignored due to override
+            fill_model_name="trade_driven",
+            quote_model_override=quote_model,
+            fill_model_override=TradeDrivenFillModel(allow_partial=True, max_fill_qty=1e18),
+            quote_qty=quote_qty,
+            maker_fee_rate=maker_fee_rate,
+            order_latency_ms=order_latency_ms,
+            cancel_latency_ms=cancel_latency_ms,
+            requote_interval_ms=requote_interval_ms,
+            order_ttl_ms=None,
+            refresh_interval_ms=None,
+            tick_size=tick_size,
+            initial_cash=calib_initial_cash,
+            initial_inventory=calib_initial_inventory,
+        )
 
-    summary = summarize_bucketed_exposure(points)
+        points = compute_bucketed_exposure(
+            orders_path=Path(stats.orders_path),
+            fills_path=Path(stats.fills_path),
+            state_path=Path(stats.state_path),
+            tick_size=tick_size,
+            min_delta_ticks=min(deltas),
+            max_delta_ticks=max(max_delta_ticks, max(deltas)),
+            min_exposure_s=min_exposure_s,
+        )
+        points.to_csv(out_dir / "calibration_points.csv", index=False)
+
+        summary = summarize_bucketed_exposure(points)
 
     fit_df = points[points["usable"]].copy()
     if fit_df.empty:
@@ -152,8 +179,9 @@ def _calibrate_poisson_window(
             "train_end_ms": int(time_max_ms),
             "exposure_s_total": float(summary["exposure_s_total"]),
             "fills_total": int(summary["fills_total"]),
-            "fills_usable_total": int(points.loc[points["usable"], "fill_events"].sum()) if "fill_events" in points and "usable" in points else 0,
-            "n_deltas_usable": int(points["usable"].sum()),
+            "fills_usable_total": int(summary.get("fills_usable_total", 0)),
+            "n_deltas_usable": int(summary.get("n_deltas_usable", 0)),
+            "calib_engine": calib_engine,
         }
 
     if fit_method == "log_linear":
@@ -172,8 +200,9 @@ def _calibrate_poisson_window(
         "train_end_ms": int(time_max_ms),
         "exposure_s_total": float(summary["exposure_s_total"]),
         "fills_total": int(summary["fills_total"]),
-            "fills_usable_total": int(summary["fills_usable_total"]),
-            "n_deltas_usable": int(summary["n_deltas_usable"]),
+        "fills_usable_total": int(summary.get("fills_usable_total", 0)),
+        "n_deltas_usable": int(summary.get("n_deltas_usable", 0)),
+        "calib_engine": calib_engine,
     }
     _write_json(out_dir / "poisson_fit.json", fit_out)
     return fit_out
@@ -208,6 +237,7 @@ def build_schedule(
     calib_root: Path,
     fallback_policy: str,
     min_usable_deltas: int,
+    calib_engine: str = "paper",
 ) -> List[Dict[str, Any]]:
     """Build a piecewise-constant Poisson schedule over the day.
 
@@ -261,6 +291,7 @@ def build_schedule(
             time_min_ms=train_start,
             time_max_ms=train_end,
             out_dir=window_dir,
+            calib_engine=calib_engine,
         )
 
         # Quality gate: even if fit returned usable, require enough distinct deltas.
@@ -348,6 +379,16 @@ def main() -> None:
     ap.add_argument("--order-latency-ms", type=int, default=int(os.getenv("ORDER_LATENCY_MS", "50")))
     ap.add_argument("--cancel-latency-ms", type=int, default=int(os.getenv("CANCEL_LATENCY_MS", "25")))
     ap.add_argument("--requote-interval-ms", type=int, default=int(os.getenv("REQUOTE_INTERVAL_MS", "250")))
+
+    ap.add_argument(
+        "--calib-engine",
+        choices=["paper", "virtual"],
+        default=os.getenv("CALIB_ENGINE", "paper"),
+        help=(
+            "Calibration execution engine. 'paper' uses PaperExchange and writes full orders/fills/state logs. "
+            "'virtual' uses virtual probes (no order objects) and is significantly faster."
+        ),
+    )
     ap.add_argument("--initial-cash", type=float, default=float(os.getenv("INITIAL_CASH", "1000")))
     ap.add_argument("--initial-inventory", type=float, default=float(os.getenv("INITIAL_INVENTORY", "0")))
 
@@ -425,6 +466,7 @@ def main() -> None:
         calib_root=calib_root,
         fallback_policy=args.fallback_policy,
         min_usable_deltas=args.min_usable_deltas,
+        calib_engine=args.calib_engine,
     )
 
     _ensure_dir(run_base)
