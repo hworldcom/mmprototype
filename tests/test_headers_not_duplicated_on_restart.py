@@ -1,6 +1,7 @@
 import csv
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import gzip
 
 import mm.market_data.recorder as recorder_mod
 from tests._paths import orderbook_path as get_orderbook_path
@@ -80,7 +81,7 @@ def test_headers_written_once_across_restarts(monkeypatch, tmp_path):
 
     # Count header occurrences in each CSV (header row repeated indicates bug)
     def header_count(path, expected_header):
-        rows = list(csv.reader(path.open()))
+        rows = list(csv.reader(gzip.open(path, 'rt', encoding='utf-8', newline='')))
         return sum(1 for r in rows if r == expected_header)
 
     ob_header = ["event_time_ms", "recv_time_ms", "recv_seq", "run_id", "epoch_id"]
@@ -98,7 +99,7 @@ def test_headers_written_once_across_restarts(monkeypatch, tmp_path):
     ev_header = ["event_id", "recv_time_ms", "recv_seq", "run_id", "type", "epoch_id", "details_json"]
 
     # orderbook header has extra columns beyond the first 4; compare prefix for robustness
-    ob_rows = list(csv.reader(orderbook_path.open()))
+    ob_rows = list(csv.reader(gzip.open(orderbook_path, 'rt', encoding='utf-8', newline='')))
     assert ob_rows[0][:5] == ob_header
     # ensure header row appears only once (exact match on full row)
     assert header_count(orderbook_path, ob_rows[0]) == 1

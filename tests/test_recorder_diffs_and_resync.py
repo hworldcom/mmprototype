@@ -105,10 +105,11 @@ def test_recorder_writes_diffs_and_resync(monkeypatch, tmp_path):
     assert len(lines) >= 2  # should have written all depth events
 
     # Gaps file
-    gaps = list(base_dir.glob(f"gaps_BTCUSDT_{day_str}.csv"))
+    gaps = list(base_dir.glob(f"gaps_BTCUSDT_{day_str}.csv.gz"))
     assert len(gaps) == 1
 
-    rows = list(csv.reader(gaps[0].open()))
+    with gzip.open(gaps[0], 'rt', encoding='utf-8', newline='') as f:
+        rows = list(csv.reader(f))
     assert rows[0] == ["recv_time_ms", "recv_seq", "run_id", "epoch_id", "event", "details"]
     # Header: recv_time_ms, recv_seq, run_id, epoch_id, event, details
     events = [r[4] for r in rows[1:]]

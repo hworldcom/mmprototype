@@ -1,6 +1,7 @@
 import csv
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import gzip
 
 import mm.market_data.recorder as recorder_mod
 
@@ -69,9 +70,9 @@ def test_no_orderbook_rows_until_synced(monkeypatch, tmp_path):
     symbol = "ETHUSDT"
     day = recorder_mod.berlin_now().strftime("%Y%m%d")
     day_dir = tmp_path / "data" / symbol / day
-    orderbook_path = day_dir / f"orderbook_ws_depth_{symbol}_{day}.csv"
+    orderbook_path = day_dir / f"orderbook_ws_depth_{symbol}_{day}.csv.gz"
 
-    rows = list(csv.reader(orderbook_path.open()))
+    rows = list(csv.reader(gzip.open(orderbook_path, 'rt', encoding='utf-8', newline='')))
     # header only (no data rows) because never synced
     assert len(rows) == 1
     assert rows[0][:5] == ["event_time_ms", "recv_time_ms", "recv_seq", "run_id", "epoch_id"]

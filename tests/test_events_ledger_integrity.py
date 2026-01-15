@@ -3,6 +3,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from tests._paths import orderbook_path as get_orderbook_path
 from tests._paths import events_path as get_events_path
+import gzip
 
 import mm.market_data.recorder as recorder_mod
 
@@ -84,7 +85,7 @@ def test_events_contains_run_start_snapshot_synced(monkeypatch, tmp_path):
     assert orderbook_path.exists()
 
     # Parse events
-    rows = list(csv.reader(events_path.open()))
+    rows = list(csv.reader(gzip.open(events_path, 'rt', encoding='utf-8', newline='')))
     header = rows[0]
     assert header == ["event_id", "recv_time_ms", "recv_seq", "run_id", "type", "epoch_id", "details_json"]
 
@@ -96,7 +97,7 @@ def test_events_contains_run_start_snapshot_synced(monkeypatch, tmp_path):
 
 
     # Ensure we wrote at least one orderbook row and it is in a valid epoch (>=1)
-    ob_rows = list(csv.reader(orderbook_path.open()))
+    ob_rows = list(csv.reader(gzip.open(orderbook_path, 'rt', encoding='utf-8', newline='')))
     assert ob_rows[0][0:5] == ["event_time_ms", "recv_time_ms", "recv_seq", "run_id", "epoch_id"]
     assert len(ob_rows) >= 2
     first_data_epoch = int(ob_rows[1][1])

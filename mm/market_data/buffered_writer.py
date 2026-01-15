@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import gzip
 import time
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -15,11 +16,13 @@ class BufferedCSVWriter:
         header: Sequence[str] | None = None,
         flush_rows: int = 1000,
         flush_interval_s: float = 1.0,
+        opener=None,
     ) -> None:
         self.path = Path(path)
         self.header = list(header) if header else None
         self.flush_rows = max(1, flush_rows)
         self.flush_interval_s = max(0.0, float(flush_interval_s))
+        self.opener = opener  # optional callable(path) -> file-like
 
         self._buffer: list[list[str]] = []
         self._file = None
@@ -32,7 +35,12 @@ class BufferedCSVWriter:
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
         existed = self.path.exists()
-        self._file = self.path.open("a", newline="")
+        if self.opener is not None:
+            self._file = self.opener(self.path)
+        elif self.path.suffix == '.gz':
+            self._file = gzip.open(self.path, 'at', encoding='utf-8', newline='')
+        else:
+            self._file = self.path.open('a', newline='')
         self._writer = csv.writer(self._file)
 
         if self.header and ((not existed) or self.path.stat().st_size == 0):

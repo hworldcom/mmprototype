@@ -1,4 +1,5 @@
 import csv
+import gzip
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -75,9 +76,10 @@ def test_appends_and_run_id_changes(monkeypatch, tmp_path):
     recorder_mod.run_recorder()
 
     day = fixed_now.strftime("%Y%m%d")
-    ob_path = tmp_path / "data" / symbol / day / f"orderbook_ws_depth_{symbol}_{day}.csv"
+    ob_path = tmp_path / "data" / symbol / day / f"orderbook_ws_depth_{symbol}_{day}.csv.gz"
 
-    rows = list(csv.reader(ob_path.open()))
+    with gzip.open(ob_path, 'rt', encoding='utf-8', newline='') as f:
+        rows = list(csv.reader(f))
 
     # Header begins with event_time_ms, recv_time_ms, recv_seq, run_id, epoch_id
     assert rows[0][:5] == ["event_time_ms", "recv_time_ms", "recv_seq", "run_id", "epoch_id"]

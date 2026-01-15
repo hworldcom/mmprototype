@@ -3,6 +3,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from tests._paths import orderbook_path as get_orderbook_path
 from tests._paths import events_path as get_events_path
+import gzip
 
 import mm.market_data.recorder as recorder_mod
 
@@ -90,7 +91,7 @@ def test_epoch_id_increments_after_resync(monkeypatch, tmp_path):
     events_path = get_events_path(tmp_path, recorder_mod, symbol)
 
     # Orderbook should contain at least one row in epoch 1 and epoch 2
-    ob_rows = list(csv.reader(orderbook_path.open()))
+    ob_rows = list(csv.reader(gzip.open(orderbook_path, 'rt', encoding='utf-8', newline='')))
     header = ob_rows[0]
     epoch_idx = header.index("epoch_id")
     epochs = [int(r[epoch_idx]) for r in ob_rows[1:]]
@@ -99,7 +100,7 @@ def test_epoch_id_increments_after_resync(monkeypatch, tmp_path):
     assert 2 not in epochs
 
     # Events should contain resync markers and show epoch progress
-    ev_rows = list(csv.reader(events_path.open()))
+    ev_rows = list(csv.reader(gzip.open(events_path, 'rt', encoding='utf-8', newline='')))
     # Header: event_id, recv_time_ms, recv_seq, run_id, type, epoch_id, details_json
     types = [r[4] for r in ev_rows[1:]]
     assert "resync_start" in types

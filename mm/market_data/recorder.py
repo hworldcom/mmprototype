@@ -115,15 +115,18 @@ def run_recorder():
         return event_id
 
     # Outputs
-    ob_path = day_dir / f"orderbook_ws_depth_{symbol}_{day_str}.csv"
-    tr_path = day_dir / f"trades_ws_{symbol}_{day_str}.csv"
-    gap_path = day_dir / f"gaps_{symbol}_{day_str}.csv"
-    ev_path = day_dir / f"events_{symbol}_{day_str}.csv"
+    ob_path = day_dir / f"orderbook_ws_depth_{symbol}_{day_str}.csv.gz"
+    tr_path = day_dir / f"trades_ws_{symbol}_{day_str}.csv.gz"
+    gap_path = day_dir / f"gaps_{symbol}_{day_str}.csv.gz"
+    ev_path = day_dir / f"events_{symbol}_{day_str}.csv.gz"
 
     def open_csv_append(path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
         existed = path.exists()
-        f = path.open("a", newline="")
+        if path.suffix == ".gz":
+            f = gzip.open(path, "at", encoding="utf-8", newline="")
+        else:
+            f = path.open("a", newline="")
         is_new = (not existed) or (path.stat().st_size == 0)
         return f, is_new
 
@@ -159,21 +162,25 @@ def run_recorder():
         "orderbook_ws_depth_csv": {
             "path": str(ob_path.name),
             "format": "csv",
+            "compression": "gzip",
             "columns": ob_header,
         },
         "trades_ws_csv": {
             "path": str(tr_path.name),
             "format": "csv",
+            "compression": "gzip",
             "columns": tr_header,
         },
         "gaps_csv": {
             "path": str(gap_path.name),
             "format": "csv",
+            "compression": "gzip",
             "columns": ["recv_time_ms", "recv_seq", "run_id", "epoch_id", "event", "details"],
         },
         "events_csv": {
             "path": str(ev_path.name),
             "format": "csv",
+            "compression": "gzip",
             "columns": ["event_id", "recv_time_ms", "recv_seq", "run_id", "type", "epoch_id", "details_json"],
         },
     }

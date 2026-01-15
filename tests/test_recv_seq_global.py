@@ -22,12 +22,16 @@ class DummyLob:
 
 
 def _read_events_recv_seq(path):
-    rows = list(csv.DictReader(path.open()))
+    opener = gzip.open if path.suffix == '.gz' else open
+    with opener(path, 'rt', encoding='utf-8', newline='') as f:
+        rows = list(csv.DictReader(f))
     return [int(r["recv_seq"]) for r in rows]
 
 
 def _read_trades_recv_seq(path):
-    rows = list(csv.DictReader(path.open()))
+    opener = gzip.open if path.suffix == '.gz' else open
+    with opener(path, 'rt', encoding='utf-8', newline='') as f:
+        rows = list(csv.DictReader(f))
     return [int(r["recv_seq"]) for r in rows]
 
 
@@ -110,8 +114,8 @@ def test_global_recv_seq_is_unique_across_message_types(monkeypatch, tmp_path):
 
     day = fixed_now.strftime("%Y%m%d")
     base = tmp_path / "data" / symbol / day
-    events_path = base / f"events_{symbol}_{day}.csv"
-    trades_path = base / f"trades_ws_{symbol}_{day}.csv"
+    events_path = base / f"events_{symbol}_{day}.csv.gz"
+    trades_path = base / f"trades_ws_{symbol}_{day}.csv.gz"
     diffs_path = base / "diffs" / f"depth_diffs_{symbol}_{day}.ndjson.gz"
 
     ev_seq = _read_events_recv_seq(events_path)

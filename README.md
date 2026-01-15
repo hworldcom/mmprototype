@@ -139,10 +139,10 @@ See `mm/calibration/README.md` for the formal process description, configuration
 Per symbol, per day:
 
 - `snapshots/snapshot_<event_id>_<tag>.csv`
-- `orderbook_ws_depth_<SYMBOL>_<YYYYMMDD>.csv`
-- `trades_ws_<SYMBOL>_<YYYYMMDD>.csv`
-- `events_<SYMBOL>_<YYYYMMDD>.csv`
-- `gaps_<SYMBOL>_<YYYYMMDD>.csv` (optional, for diagnostics)
+- `orderbook_ws_depth_<SYMBOL>_<YYYYMMDD>.csv.gz`
+- `trades_ws_<SYMBOL>_<YYYYMMDD>.csv.gz`
+- `events_<SYMBOL>_<YYYYMMDD>.csv.gz`
+- `gaps_<SYMBOL>_<YYYYMMDD>.csv.gz` (optional, for diagnostics)
 - `diffs/depth_diffs_<SYMBOL>_<YYYYMMDD>.ndjson.gz` (optional raw WS diffs)
 
 All numeric values are stored in **human‑readable fixed decimals**.
@@ -193,10 +193,10 @@ All numeric values are stored in **human‑readable fixed decimals**.
 
 One process per symbol. Produces the following per day:
 
-- `orderbook_ws_depth_<SYMBOL>_<YYYYMMDD>.csv`: top-N bids/asks frames (only when book is synced)
-- `trades_ws_<SYMBOL>_<YYYYMMDD>.csv`: trade prints with recv timestamps
-- `events_<SYMBOL>_<YYYYMMDD>.csv`: authoritative ledger for run boundaries and sync/resync epochs
-- `gaps_<SYMBOL>_<YYYYMMDD>.csv`: optional stream of gap/resync diagnostics
+- `orderbook_ws_depth_<SYMBOL>_<YYYYMMDD>.csv.gz`: top-N bids/asks frames (only when book is synced)
+- `trades_ws_<SYMBOL>_<YYYYMMDD>.csv.gz`: trade prints with recv timestamps
+- `events_<SYMBOL>_<YYYYMMDD>.csv.gz`: authoritative ledger for run boundaries and sync/resync epochs
+- `gaps_<SYMBOL>_<YYYYMMDD>.csv.gz`: optional stream of gap/resync diagnostics
 - `snapshots/snapshot_<event_id>_<tag>.csv`: REST snapshots referenced by `events.csv`
 - `diffs/depth_diffs_<SYMBOL>_<YYYYMMDD>.ndjson.gz`: optional gzip’d raw WS diffs for exact replay
 
@@ -204,10 +204,10 @@ One process per symbol. Produces the following per day:
 
 ```
 data/<SYMBOL>/<YYYYMMDD>/
-  orderbook_ws_depth_<SYMBOL>_<YYYYMMDD>.csv
-  trades_ws_<SYMBOL>_<YYYYMMDD>.csv
-  events_<SYMBOL>_<YYYYMMDD>.csv
-  gaps_<SYMBOL>_<YYYYMMDD>.csv
+  orderbook_ws_depth_<SYMBOL>_<YYYYMMDD>.csv.gz
+  trades_ws_<SYMBOL>_<YYYYMMDD>.csv.gz
+  events_<SYMBOL>_<YYYYMMDD>.csv.gz
+  gaps_<SYMBOL>_<YYYYMMDD>.csv.gz
   snapshots/
     snapshot_<event_id>_<tag>.csv
   diffs/
@@ -215,10 +215,10 @@ data/<SYMBOL>/<YYYYMMDD>/
 
 ### File descriptions
 
-- `orderbook_ws_depth_<SYMBOL>_<YYYYMMDD>.csv` — book frames (timestamps, run/epoch ids, top-N ladders).
-- `trades_ws_<SYMBOL>_<YYYYMMDD>.csv` — WebSocket trades with event/recv timestamps, run id, price, quantity, aggressor flag.
-- `events_<SYMBOL>_<YYYYMMDD>.csv` — lifecycle ledger documenting run start/stop, snapshot requests, loads, resyncs, and window boundaries.
-- `gaps_<SYMBOL>_<YYYYMMDD>.csv` — optional diagnostics for gap detection, including timestamps and free-form details.
+- `orderbook_ws_depth_<SYMBOL>_<YYYYMMDD>.csv.gz` — book frames (timestamps, run/epoch ids, top-N ladders).
+- `trades_ws_<SYMBOL>_<YYYYMMDD>.csv.gz` — WebSocket trades with event/recv timestamps, run id, price, quantity, aggressor flag.
+- `events_<SYMBOL>_<YYYYMMDD>.csv.gz` — lifecycle ledger documenting run start/stop, snapshot requests, loads, resyncs, and window boundaries.
+- `gaps_<SYMBOL>_<YYYYMMDD>.csv.gz` — optional diagnostics for gap detection, including timestamps and free-form details.
 - `snapshots/` — tagged CSV snapshots keyed by run/event id, referenced by `events.csv`.
 - `diffs/` — gzipped NDJSON stream of raw depth diffs for exact replay alignment.
 ```
@@ -240,9 +240,9 @@ docker run --rm -e SYMBOL=ETHUSDT -v "$PWD/data":/app/data mm-recorder:latest
 ## Backtesting inputs
 
 Load:
-- `orderbook_ws_depth_<SYMBOL>_<YYYYMMDD>.csv` (filter `epoch_id >= 1`)
-- `trades_ws_<SYMBOL>_<YYYYMMDD>.csv` (align by `event_time_ms`)
-- `events_<SYMBOL>_<YYYYMMDD>.csv` (optional: segment by `epoch_id`, diagnose gaps, run boundaries)
+- `orderbook_ws_depth_<SYMBOL>_<YYYYMMDD>.csv.gz` (filter `epoch_id >= 1`)
+- `trades_ws_<SYMBOL>_<YYYYMMDD>.csv.gz` (align by `event_time_ms`)
+- `events_<SYMBOL>_<YYYYMMDD>.csv.gz` (optional: segment by `epoch_id`, diagnose gaps, run boundaries)
 
 ---
 

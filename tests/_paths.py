@@ -15,22 +15,22 @@ def day_dir(tmp_path: Path, recorder_mod, symbol: str) -> Path:
 def orderbook_path(tmp_path: Path, recorder_mod, symbol: str) -> Path:
     d = day_dir(tmp_path, recorder_mod, symbol)
     day = day_str(recorder_mod)
-    return d / f"orderbook_ws_depth_{symbol}_{day}.csv"
+    return d / f"orderbook_ws_depth_{symbol}_{day}.csv.gz"
 
 
 def trades_path(tmp_path: Path, recorder_mod, symbol: str) -> Path:
     d = day_dir(tmp_path, recorder_mod, symbol)
     day = day_str(recorder_mod)
-    return d / f"trades_ws_{symbol}_{day}.csv"
+    return d / f"trades_ws_{symbol}_{day}.csv.gz"
 
 
 def gaps_path(tmp_path: Path, recorder_mod, symbol: str) -> Path:
     d = day_dir(tmp_path, recorder_mod, symbol)
     day = day_str(recorder_mod)
-    return d / f"gaps_{symbol}_{day}.csv"
+    return d / f"gaps_{symbol}_{day}.csv.gz"
 
 
 def events_path(tmp_path: Path, recorder_mod, symbol: str) -> Path:
     d = day_dir(tmp_path, recorder_mod, symbol)
     day = day_str(recorder_mod)
-    return d / f"events_{symbol}_{day}.csv"
+    return d / f"events_{symbol}_{day}.csv.gz"

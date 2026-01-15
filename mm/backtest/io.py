@@ -65,7 +65,11 @@ def find_depth_diffs_file(root: Path, symbol: str, yyyymmdd: str) -> Path:
 
 def find_trades_file(root: Path, symbol: str, yyyymmdd: str) -> Path:
     ddir = day_dir(root, symbol, yyyymmdd)
-    matches = list(ddir.glob(f"trades_ws_{symbol.upper()}_{yyyymmdd}.csv"))
+    matches = list(ddir.glob(f"trades_ws_{symbol.upper()}_{yyyymmdd}.csv.gz"))
+    if not matches:
+        matches = list(ddir.glob(f"trades_ws_{symbol.upper()}_{yyyymmdd}.csv"))
+    if not matches:
+        matches = list(ddir.glob(f"trades_ws_{symbol.upper()}_*.csv.gz"))
     if not matches:
         matches = list(ddir.glob(f"trades_ws_{symbol.upper()}_*.csv"))
     if not matches:
@@ -75,7 +79,11 @@ def find_trades_file(root: Path, symbol: str, yyyymmdd: str) -> Path:
 
 def find_events_file(root: Path, symbol: str, yyyymmdd: str) -> Path:
     ddir = day_dir(root, symbol, yyyymmdd)
-    matches = list(ddir.glob(f"events_{symbol.upper()}_{yyyymmdd}.csv"))
+    matches = list(ddir.glob(f"events_{symbol.upper()}_{yyyymmdd}.csv.gz"))
+    if not matches:
+        matches = list(ddir.glob(f"events_{symbol.upper()}_{yyyymmdd}.csv"))
+    if not matches:
+        matches = list(ddir.glob(f"events_{symbol.upper()}_*.csv.gz"))
     if not matches:
         matches = list(ddir.glob(f"events_{symbol.upper()}_*.csv"))
     if not matches:
@@ -102,7 +110,8 @@ def iter_depth_diffs(path: Path) -> Iterator[DepthDiff]:
 
 
 def iter_trades_csv(path: Path) -> Iterator[Trade]:
-    with path.open("r", newline="") as f:
+    opener = gzip.open if path.suffix == '.gz' else open
+    with opener(path, 'rt', encoding='utf-8', newline='') as f:
         r = csv.DictReader(f)
         for row in r:
             trade_id = row.get("trade_id")
@@ -121,7 +130,8 @@ def iter_trades_csv(path: Path) -> Iterator[Trade]:
 
 
 def iter_events_csv(path: Path) -> Iterator[EventRow]:
-    with path.open("r", newline="") as f:
+    opener = gzip.open if path.suffix == '.gz' else open
+    with opener(path, 'rt', encoding='utf-8', newline='') as f:
         r = csv.DictReader(f)
         for row in r:
             recv_seq = row.get("recv_seq")
