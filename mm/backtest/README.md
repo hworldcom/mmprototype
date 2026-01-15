@@ -64,10 +64,10 @@ Binance (live)
 Recorder (production)
         │
         ├─ depth_diffs_*.ndjson.gz
-        ├─ trades_ws_*.csv
+        ├─ trades_ws_*.csv.gz
         ├─ snapshots/*.csv
-        ├─ gaps_*.csv
-        └─ events_*.csv
+        ├─ gaps_*.csv.gz
+        └─ events_*.csv.gz
         │
         ▼
 Replay (backtest)
@@ -84,10 +84,10 @@ Replay (backtest)
 data/
 └── BTCUSDT/
     └── 20251216/
-        ├── orderbook_ws_depth_BTCUSDT_20251216.csv
-        ├── trades_ws_BTCUSDT_20251216.csv
-        ├── gaps_BTCUSDT_20251216.csv
-        ├── events_BTCUSDT_20251216.csv
+        ├── orderbook_ws_depth_BTCUSDT_20251216.csv.gz
+        ├── trades_ws_BTCUSDT_20251216.csv.gz
+        ├── gaps_BTCUSDT_20251216.csv.gz
+        ├── events_BTCUSDT_20251216.csv.gz
         ├── snapshots/
         │   ├── snapshot_000002_initial.csv
         │   └── snapshot_000123_resync_000001.csv
@@ -103,17 +103,17 @@ data/
 |----|----|
 | depth_diffs_*.ndjson.gz | Raw WS depth diff events |
 | snapshots/*.csv | Authoritative REST snapshots |
-| events_*.csv | Snapshot & resync timeline |
-| gaps_*.csv | Explicit sync failures |
-| orderbook_ws_depth_*.csv | Derived top-N (analysis only) |
-| trades_ws_*.csv | Trade prints |
+| events_*.csv.gz | Snapshot & resync timeline |
+| gaps_*.csv.gz | Explicit sync failures |
+| orderbook_ws_depth_*.csv.gz | Derived top-N (analysis only) |
+| trades_ws_*.csv.gz | Trade prints |
 
 Replay uses **snapshots + diffs**, not the derived top-N CSV.
 
 ### Dependency on `mm/market_data`
 
 - **Producer → Consumer contract:** folders and filenames must match the recorder output exactly (`data/<SYMBOL>/<YYYYMMDD>/...`). Keep both modules on the same commit so schema changes are synchronized.
-- **Events ledger:** the replay bootstrapper reads `events_*.csv` to determine which snapshot tags to load and how to segment epochs.
+- **Events ledger:** the replay bootstrapper reads `events_*.csv.gz` to determine which snapshot tags to load and how to segment epochs.
 - **Gaps file:** optional but useful when diagnosing why replay could not bridge a day.
 - **Top-N CSVs:** not used for core replay but helpful for quick visualizations; they share the same buffering logic as production.
 

@@ -7,6 +7,18 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 
+def _is_empty_text_file(path: Path) -> bool:
+    if not path.exists():
+        return True
+    if path.suffix == ".gz":
+        try:
+            with gzip.open(path, "rt", encoding="utf-8", newline="") as f:
+                return f.readline() == ""
+        except Exception:
+            return False
+    return path.stat().st_size == 0
+
+
 class BufferedCSVWriter:
     """Batch rows in memory before flushing to disk to reduce fsync pressure."""
 
@@ -43,7 +55,8 @@ class BufferedCSVWriter:
             self._file = self.path.open('a', newline='')
         self._writer = csv.writer(self._file)
 
-        if self.header and ((not existed) or self.path.stat().st_size == 0):
+        is_empty = (not existed) or _is_empty_text_file(self.path)
+        if self.header and is_empty:
             self._writer.writerow(self.header)
             self._file.flush()
 

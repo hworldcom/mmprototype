@@ -25,7 +25,7 @@ from mm.logging_config import setup_logging
 from .ws_stream import BinanceWSStream
 from .sync_engine import OrderBookSyncEngine
 from .snapshot import record_rest_snapshot
-from .buffered_writer import BufferedCSVWriter, BufferedTextWriter
+from .buffered_writer import BufferedCSVWriter, BufferedTextWriter, _is_empty_text_file
 from .schema import write_schema, SCHEMA_VERSION
 
 ORIGINAL_RECORD_REST_SNAPSHOT = record_rest_snapshot
@@ -127,7 +127,7 @@ def run_recorder():
             f = gzip.open(path, "at", encoding="utf-8", newline="")
         else:
             f = path.open("a", newline="")
-        is_new = (not existed) or (path.stat().st_size == 0)
+        is_new = (not existed) or _is_empty_text_file(path)
         return f, is_new
 
     ob_header = (

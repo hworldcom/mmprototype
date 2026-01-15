@@ -67,11 +67,7 @@ def find_trades_file(root: Path, symbol: str, yyyymmdd: str) -> Path:
     ddir = day_dir(root, symbol, yyyymmdd)
     matches = list(ddir.glob(f"trades_ws_{symbol.upper()}_{yyyymmdd}.csv.gz"))
     if not matches:
-        matches = list(ddir.glob(f"trades_ws_{symbol.upper()}_{yyyymmdd}.csv"))
-    if not matches:
         matches = list(ddir.glob(f"trades_ws_{symbol.upper()}_*.csv.gz"))
-    if not matches:
-        matches = list(ddir.glob(f"trades_ws_{symbol.upper()}_*.csv"))
     if not matches:
         raise FileNotFoundError(f"No trades file found in {ddir}")
     return sorted(matches)[-1]
@@ -81,11 +77,7 @@ def find_events_file(root: Path, symbol: str, yyyymmdd: str) -> Path:
     ddir = day_dir(root, symbol, yyyymmdd)
     matches = list(ddir.glob(f"events_{symbol.upper()}_{yyyymmdd}.csv.gz"))
     if not matches:
-        matches = list(ddir.glob(f"events_{symbol.upper()}_{yyyymmdd}.csv"))
-    if not matches:
         matches = list(ddir.glob(f"events_{symbol.upper()}_*.csv.gz"))
-    if not matches:
-        matches = list(ddir.glob(f"events_{symbol.upper()}_*.csv"))
     if not matches:
         raise FileNotFoundError(f"No events file found in {ddir}")
     return sorted(matches)[-1]

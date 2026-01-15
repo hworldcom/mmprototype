@@ -19,10 +19,10 @@ The folder additionally contains tests that validate epochs, header handling, an
 
 Each recorder run (one symbol per process) produces the following files under `data/<SYMBOL>/<YYYYMMDD>/`:
 
-- `orderbook_ws_depth_<SYMBOL>_<YYYYMMDD>.csv` — top-N book frames whenever the local book is synced.
-- `trades_ws_<SYMBOL>_<YYYYMMDD>.csv` — individual trade prints with event/receive timestamps and trade identifiers.
-- `events_<SYMBOL>_<YYYYMMDD>.csv` — authoritative ledger covering WS lifecycle, snapshot tags, resync epochs, and run boundaries.
-- `gaps_<SYMBOL>_<YYYYMMDD>.csv` — optional audit of detected sequencing issues.
+- `orderbook_ws_depth_<SYMBOL>_<YYYYMMDD>.csv.gz` — top-N book frames whenever the local book is synced.
+- `trades_ws_<SYMBOL>_<YYYYMMDD>.csv.gz` — individual trade prints with event/receive timestamps and trade identifiers.
+- `events_<SYMBOL>_<YYYYMMDD>.csv.gz` — authoritative ledger covering WS lifecycle, snapshot tags, resync epochs, and run boundaries.
+- `gaps_<SYMBOL>_<YYYYMMDD>.csv.gz` — optional audit of detected sequencing issues.
 - `snapshots/snapshot_<event_id>_<tag>.csv` — REST snapshots referenced by the events ledger.
 - `diffs/depth_diffs_<SYMBOL>_<YYYYMMDD>.ndjson.gz` — optional compressed raw WS diffs for exact replays.
 
