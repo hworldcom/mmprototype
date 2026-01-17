@@ -319,6 +319,7 @@ def _filter_ndjson_file(path: Path, start_ms: int, end_ms: int, write: bool, tz:
 
 
 def _purge_snapshots(snap_dir: Path, target_day: str, tz: str, write: bool) -> FileReport:
+    log(f"Scanning snapshots in {snap_dir} (mode={'delete' if write else 'scan'})")
     # Snapshot filenames in this project follow:
     # snapshot_<recv_ms>_<tag>.csv[.gz]
     # We keep snapshot files whose recv_ms falls within target day.
@@ -355,6 +356,7 @@ def _purge_snapshots(snap_dir: Path, target_day: str, tz: str, write: bool) -> F
             p.unlink()
 
     reason = "clean" if removed_files == 0 else "removed_snapshot_files_outside_day"
+    log(f"Snapshots summary: total={total}, kept_in_day={kept}, removed_outside_day={removed_files}, last_kept={_fmt_ts(last_kept_ms, tz)}")
     return FileReport(snap_dir, "snapshots", total, kept, removed_files, reason, last_seen_ms=last_seen_ms, last_seen_local=_fmt_ts(last_seen_ms, tz), last_kept_ms=last_kept_ms, last_kept_local=_fmt_ts(last_kept_ms, tz))
 
 
@@ -389,7 +391,9 @@ def main() -> int:
     reports = []
 
     # Snapshots first (separate logic)
-    reports.append(_purge_snapshots(day_dir / "snapshots", args.day, args.tz, do_write))
+    snap_report = _purge_snapshots(day_dir / "snapshots", args.day, args.tz, do_write)
+    reports.append(snap_report)
+    log(f"Snapshots: removed={snap_report.removed} kept={snap_report.kept} total={snap_report.total} last_kept={snap_report.last_kept_local or 'n/a'}")
 
     # Other files
     processed = 0
