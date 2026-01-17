@@ -85,6 +85,15 @@ def _day_bounds_ms(day: str, tz: str) -> Tuple[int, int]:
     end = start + timedelta(days=1)
     return int(start.timestamp() * 1000), int(end.timestamp() * 1000)
 
+def _fmt_ts(ms: int | None, tz: str) -> str | None:
+    if ms is None:
+        return None
+    if ZoneInfo is None:
+        return str(ms)
+    dt = datetime.fromtimestamp(ms / 1000.0, tz=ZoneInfo(tz))
+    return dt.isoformat()
+
+
 
 def _open_text(path: Path, mode: str):
     # mode: 'rt' or 'wt'
@@ -116,11 +125,14 @@ class FileReport:
     kept: int
     removed: int
     reason: str
+    last_seen_ms: int | None = None
+    last_seen_local: str | None = None
 
 
-def _filter_csv_file(path: Path, start_ms: int, end_ms: int, write: bool) -> FileReport:
+def _filter_csv_file(path: Path, start_ms: int, end_ms: int, write: bool, tz: str) -> FileReport:
     total = kept = 0
     reason = ""
+    last_seen_ms: int | None = None
 
     with _open_text(path, "rt") as f:
         reader = csv.DictReader(f)
@@ -143,12 +155,17 @@ def _filter_csv_file(path: Path, start_ms: int, end_ms: int, write: bool) -> Fil
             row_idx += 1
             if row_idx % 500000 == 0:
                 log(f"{path.name}: scanned {row_idx} rows...")
+
             total += 1
             v = row.get(tcol)
             try:
                 ts = int(float(v)) if v not in (None, "") else None
             except Exception:
                 ts = None
+
+            if ts is not None:
+                last_seen_ms = ts if last_seen_ms is None else max(last_seen_ms, ts)
+
             if ts is not None and start_ms <= ts < end_ms:
                 kept += 1
                 if write:
@@ -169,7 +186,6 @@ def _filter_csv_file(path: Path, start_ms: int, end_ms: int, write: bool) -> Fil
     if write:
         tmp_path = path.with_suffix(path.suffix + ".tmp")
         if kept == 0:
-            # Remove both tmp and original
             try:
                 tmp_path.unlink(missing_ok=True)  # py3.8+
             except TypeError:
@@ -179,13 +195,23 @@ def _filter_csv_file(path: Path, start_ms: int, end_ms: int, write: bool) -> Fil
         else:
             os.replace(tmp_path, path)
 
-    return FileReport(path, "csv", total, kept, removed, reason)
+    return FileReport(
+        path,
+        "csv",
+        total,
+        kept,
+        removed,
+        reason,
+        last_seen_ms=last_seen_ms,
+        last_seen_local=_fmt_ts(last_seen_ms, tz),
+    )
 
 
-def _filter_ndjson_file(path: Path, start_ms: int, end_ms: int, write: bool) -> FileReport:
+def _filter_ndjson_file(path: Path, start_ms: int, end_ms: int, write: bool, tz: str) -> FileReport:
     total = kept = 0
     reason = ""
     truncated = False
+    last_seen_ms: int | None = None
 
     tmp_path = path.with_suffix(path.suffix + ".tmp") if write else None
     out_f = None
@@ -218,13 +244,21 @@ def _filter_ndjson_file(path: Path, start_ms: int, end_ms: int, write: bool) -> 
                         ts = int(float(obj.get(time_key_used)))
                     except Exception:
                         ts = None
+
+                if ts is not None:
+                    last_seen_ms = ts if last_seen_ms is None else max(last_seen_ms, ts)
+
                 if ts is not None and start_ms <= ts < end_ms:
                     kept += 1
                     if write and out_f is not None:
-                        out_f.write(json.dumps(obj, separators=(",", ":")) + "\n")
+                        out_f.write(json.dumps(obj, separators=(",", ":")) + "\\n")
+
         except EOFError:
             truncated = True
-            log(f"WARNING: {path.name}: gzip stream ended unexpectedly (truncated/corrupt). Proceeding with partial data.")
+            log(
+                f"WARNING: {path.name}: gzip stream ended unexpectedly (truncated/corrupt). "
+                "Proceeding with partial data."
+            )
 
     if write and out_f is not None:
         out_f.flush()
@@ -253,7 +287,16 @@ def _filter_ndjson_file(path: Path, start_ms: int, end_ms: int, write: bool) -> 
         else:
             os.replace(tmp_path, path)
 
-    return FileReport(path, "ndjson", total, kept, removed, reason)
+    return FileReport(
+        path,
+        "ndjson",
+        total,
+        kept,
+        removed,
+        reason,
+        last_seen_ms=last_seen_ms,
+        last_seen_local=_fmt_ts(last_seen_ms, tz),
+    )
 
 
 def _purge_snapshots(snap_dir: Path, target_day: str, tz: str, write: bool) -> FileReport:
@@ -267,6 +310,7 @@ def _purge_snapshots(snap_dir: Path, target_day: str, tz: str, write: bool) -> F
 
     total = kept = 0
     removed_files = 0
+    last_seen_ms = None
 
     for p in sorted(snap_dir.iterdir()):
         if not p.is_file():
@@ -281,6 +325,8 @@ def _purge_snapshots(snap_dir: Path, target_day: str, tz: str, write: bool) -> F
                 ts = int(parts[1])
             except Exception:
                 ts = None
+        if ts is not None:
+            last_seen_ms = ts if last_seen_ms is None else max(last_seen_ms, ts)
         if ts is not None and start_ms <= ts < end_ms:
             kept += 1
             continue
@@ -289,7 +335,7 @@ def _purge_snapshots(snap_dir: Path, target_day: str, tz: str, write: bool) -> F
             p.unlink()
 
     reason = "clean" if removed_files == 0 else "removed_snapshot_files_outside_day"
-    return FileReport(snap_dir, "snapshots", total, kept, removed_files, reason)
+    return FileReport(snap_dir, "snapshots", total, kept, removed_files, reason, last_seen_ms=last_seen_ms, last_seen_local=_fmt_ts(last_seen_ms, tz))
 
 
 def _iter_target_files(day_dir: Path) -> Iterable[Path]:
@@ -339,9 +385,9 @@ def main() -> int:
         # Determine by extension
         suffixes = "".join(p.suffixes)
         if suffixes.endswith(".ndjson") or suffixes.endswith(".ndjson.gz") or suffixes.endswith(".jsonl") or suffixes.endswith(".jsonl.gz"):
-            reports.append(_filter_ndjson_file(p, start_ms, end_ms, do_write))
+            reports.append(_filter_ndjson_file(p, start_ms, end_ms, do_write, args.tz))
         elif suffixes.endswith(".csv") or suffixes.endswith(".csv.gz"):
-            reports.append(_filter_csv_file(p, start_ms, end_ms, do_write))
+            reports.append(_filter_csv_file(p, start_ms, end_ms, do_write, args.tz))
         else:
             # Ignore unknown files
             continue
@@ -367,7 +413,8 @@ def main() -> int:
     print()
 
     for r in affected:
-        print(f"- {r.kind:9s} | removed={r.removed:8d} kept={r.kept:8d} total={r.total:8d} | {r.reason} | {r.path}")
+        last = r.last_seen_local or "n/a"
+        print(f"- {r.kind:9s} | removed={r.removed:8d} kept={r.kept:8d} total={r.total:8d} | last={last} | {r.reason} | {r.path}")
 
     if args.mode == "delete":
         print()
