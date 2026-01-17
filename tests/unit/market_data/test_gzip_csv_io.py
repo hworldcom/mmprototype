@@ -47,6 +47,28 @@ def test_find_trades_and_events_prefers_gz(tmp_path: Path) -> None:
     assert find_events_file(root, symbol, yyyymmdd) == events_gz
 
 
+def test_find_trades_and_events_requires_gz(tmp_path: Path) -> None:
+    """We intentionally do not support legacy uncompressed CSV inputs."""
+    root = tmp_path
+    symbol = "BTCUSDT"
+    yyyymmdd = "20251223"
+    ddir = root / symbol / yyyymmdd
+    ddir.mkdir(parents=True, exist_ok=True)
+
+    # Only create legacy .csv (no .gz)
+    (ddir / f"trades_ws_{symbol}_{yyyymmdd}.csv").write_text(
+        "event_time_ms,recv_time_ms,price,qty,is_buyer_maker\n1,1,100,0.1,1\n"
+    )
+    (ddir / f"events_{symbol}_{yyyymmdd}.csv").write_text(
+        "event_id,recv_time_ms,run_id,type,epoch_id,details_json\n1,1,7,TEST,0,{}\n"
+    )
+
+    with pytest.raises(FileNotFoundError):
+        find_trades_file(root, symbol, yyyymmdd)
+    with pytest.raises(FileNotFoundError):
+        find_events_file(root, symbol, yyyymmdd)
+
+
 def test_iter_trades_and_events_can_read_gz(tmp_path: Path) -> None:
     root = tmp_path
     symbol = "BTCUSDT"
@@ -83,3 +105,21 @@ def test_iter_trades_and_events_can_read_gz(tmp_path: Path) -> None:
     assert e.type == "EPOCH"
     assert e.epoch_id == 3
     assert e.recv_seq == 11
+
+
+def test_iter_trades_and_events_reject_plain_csv(tmp_path: Path) -> None:
+    root = tmp_path
+    symbol = "BTCUSDT"
+    yyyymmdd = "20251223"
+    ddir = root / symbol / yyyymmdd
+    ddir.mkdir(parents=True, exist_ok=True)
+
+    trades_csv = ddir / f"trades_ws_{symbol}_{yyyymmdd}.csv"
+    trades_csv.write_text("event_time_ms,recv_time_ms,price,qty,is_buyer_maker\n1,1,100,0.1,1\n")
+    events_csv = ddir / f"events_{symbol}_{yyyymmdd}.csv"
+    events_csv.write_text("event_id,recv_time_ms,run_id,type,epoch_id,details_json\n1,1,7,TEST,0,{}\n")
+
+    with pytest.raises(ValueError):
+        next(iter_trades_csv(trades_csv))
+    with pytest.raises(ValueError):
+        next(iter_events_csv(events_csv))

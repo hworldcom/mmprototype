@@ -27,8 +27,10 @@ def test_eventrow_fields_and_iter_events_csv_parses(tmp_path: Path):
     assert er.recv_seq == 42
 
     # 2) iter_events_csv must parse a CSV with these columns (recv_seq optional).
-    p = tmp_path / "events.csv"
-    with p.open("w", newline="") as f:
+    import gzip
+
+    p = tmp_path / "events.csv.gz"
+    with gzip.open(p, "wt", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(
             f,
             fieldnames=[

@@ -26,6 +26,8 @@ Each recorder run (one symbol per process) produces the following files under `d
 - `snapshots/snapshot_<event_id>_<tag>.csv` — REST snapshots referenced by the events ledger.
 - `diffs/depth_diffs_<SYMBOL>_<YYYYMMDD>.ndjson.gz` — optional compressed raw WS diffs for exact replays.
 
+Uncompressed outputs are intentionally not supported in the loader path. If you have historical `.csv`/`.ndjson` artifacts, convert them with `./scripts/compress_existing_data.sh` before attempting replay/backtests.
+
 The `mm/backtest` package expects this structure verbatim. Avoid renaming columns or folders unless you also update the replay loaders.
 
 ## Running the recorder

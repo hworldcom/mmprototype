@@ -145,6 +145,8 @@ Per symbol, per day:
 - `gaps_<SYMBOL>_<YYYYMMDD>.csv.gz` (optional, for diagnostics)
 - `diffs/depth_diffs_<SYMBOL>_<YYYYMMDD>.ndjson.gz` (optional raw WS diffs)
 
+Uncompressed market-data files (`.csv`, `.ndjson`, `.jsonl`) are **not supported** by the replay/backtest readers. If you have legacy uncompressed outputs, convert them in-place with `./scripts/compress_existing_data.sh`.
+
 All numeric values are stored in **human‑readable fixed decimals**.
 
 ---

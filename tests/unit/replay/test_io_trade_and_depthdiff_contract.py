@@ -60,8 +60,10 @@ def test_trade_fields_and_iter_trades_csv_parses(tmp_path: Path):
     assert tr.trade_time_ms == 901
     assert tr.recv_seq == 42
 
-    p = tmp_path / "trades.csv"
-    with p.open("w", newline="") as f:
+    import gzip
+
+    p = tmp_path / "trades.csv.gz"
+    with gzip.open(p, "wt", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(
             f,
             fieldnames=[
@@ -104,8 +106,8 @@ def test_trade_fields_and_iter_trades_csv_parses(tmp_path: Path):
 
 
     # Also ensure fallback works when the recv_time_ms column is absent entirely.
-    p2 = tmp_path / "trades_no_recv.csv"
-    with p2.open("w", newline="") as f:
+    p2 = tmp_path / "trades_no_recv.csv.gz"
+    with gzip.open(p2, "wt", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(
             f,
             fieldnames=[

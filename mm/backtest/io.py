@@ -59,7 +59,11 @@ def find_depth_diffs_file(root: Path, symbol: str, yyyymmdd: str) -> Path:
         # fallback: any depth_diffs_SYMBOL_*.ndjson.gz
         matches = list(ddir.glob(f"depth_diffs_{symbol.upper()}_*.ndjson.gz"))
     if not matches:
-        raise FileNotFoundError(f"No depth diffs file found in {ddir}")
+        raise FileNotFoundError(
+            "Missing compressed depth diffs file. Expected something like: "
+            f"{ddir}/depth_diffs_{symbol.upper()}_{yyyymmdd}.ndjson.gz. "
+            "If you have legacy uncompressed files, run: scripts/compress_existing_data.sh"
+        )
     return sorted(matches)[-1]
 
 
@@ -69,7 +73,11 @@ def find_trades_file(root: Path, symbol: str, yyyymmdd: str) -> Path:
     if not matches:
         matches = list(ddir.glob(f"trades_ws_{symbol.upper()}_*.csv.gz"))
     if not matches:
-        raise FileNotFoundError(f"No trades file found in {ddir}")
+        raise FileNotFoundError(
+            "Missing compressed trades file. Expected something like: "
+            f"{ddir}/trades_ws_{symbol.upper()}_{yyyymmdd}.csv.gz. "
+            "If you have legacy uncompressed files, run: scripts/compress_existing_data.sh"
+        )
     return sorted(matches)[-1]
 
 
@@ -79,7 +87,11 @@ def find_events_file(root: Path, symbol: str, yyyymmdd: str) -> Path:
     if not matches:
         matches = list(ddir.glob(f"events_{symbol.upper()}_*.csv.gz"))
     if not matches:
-        raise FileNotFoundError(f"No events file found in {ddir}")
+        raise FileNotFoundError(
+            "Missing compressed events file. Expected something like: "
+            f"{ddir}/events_{symbol.upper()}_{yyyymmdd}.csv.gz. "
+            "If you have legacy uncompressed files, run: scripts/compress_existing_data.sh"
+        )
     return sorted(matches)[-1]
 
 
@@ -102,8 +114,12 @@ def iter_depth_diffs(path: Path) -> Iterator[DepthDiff]:
 
 
 def iter_trades_csv(path: Path) -> Iterator[Trade]:
-    opener = gzip.open if path.suffix == '.gz' else open
-    with opener(path, 'rt', encoding='utf-8', newline='') as f:
+    if path.suffix != ".gz":
+        raise ValueError(
+            f"Expected a .csv.gz trades file, got: {path}. "
+            "If you have legacy uncompressed files, run: scripts/compress_existing_data.sh"
+        )
+    with gzip.open(path, "rt", encoding="utf-8", newline="") as f:
         r = csv.DictReader(f)
         for row in r:
             trade_id = row.get("trade_id")
@@ -122,8 +138,12 @@ def iter_trades_csv(path: Path) -> Iterator[Trade]:
 
 
 def iter_events_csv(path: Path) -> Iterator[EventRow]:
-    opener = gzip.open if path.suffix == '.gz' else open
-    with opener(path, 'rt', encoding='utf-8', newline='') as f:
+    if path.suffix != ".gz":
+        raise ValueError(
+            f"Expected a .csv.gz events file, got: {path}. "
+            "If you have legacy uncompressed files, run: scripts/compress_existing_data.sh"
+        )
+    with gzip.open(path, "rt", encoding="utf-8", newline="") as f:
         r = csv.DictReader(f)
         for row in r:
             recv_seq = row.get("recv_seq")

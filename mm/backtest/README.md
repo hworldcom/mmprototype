@@ -76,6 +76,8 @@ Replay (backtest)
         └─ Strategy / Fill model
 ```
 
+Uncompressed market-data artifacts are not supported by the replay readers. If your `data/` folder contains legacy `.csv` / `.ndjson` files, convert them with `./scripts/compress_existing_data.sh`.
+
 ---
 
 ## Directory Layout
