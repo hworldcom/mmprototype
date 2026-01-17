@@ -127,12 +127,15 @@ class FileReport:
     reason: str
     last_seen_ms: int | None = None
     last_seen_local: str | None = None
+    last_kept_ms: int | None = None
+    last_kept_local: str | None = None
 
 
 def _filter_csv_file(path: Path, start_ms: int, end_ms: int, write: bool, tz: str) -> FileReport:
     total = kept = 0
     reason = ""
     last_seen_ms: int | None = None
+    last_kept_ms: int | None = None
 
     with _open_text(path, "rt") as f:
         reader = csv.DictReader(f)
@@ -168,6 +171,7 @@ def _filter_csv_file(path: Path, start_ms: int, end_ms: int, write: bool, tz: st
 
             if ts is not None and start_ms <= ts < end_ms:
                 kept += 1
+                last_kept_ms = ts if last_kept_ms is None else max(last_kept_ms, ts)
                 if write:
                     writer.writerow(row)  # type: ignore[union-attr]
 
@@ -204,6 +208,8 @@ def _filter_csv_file(path: Path, start_ms: int, end_ms: int, write: bool, tz: st
         reason,
         last_seen_ms=last_seen_ms,
         last_seen_local=_fmt_ts(last_seen_ms, tz),
+        last_kept_ms=last_kept_ms,
+        last_kept_local=_fmt_ts(last_kept_ms, tz),
     )
 
 
@@ -212,6 +218,7 @@ def _filter_ndjson_file(path: Path, start_ms: int, end_ms: int, write: bool, tz:
     reason = ""
     truncated = False
     last_seen_ms: int | None = None
+    last_kept_ms: int | None = None
 
     tmp_path = path.with_suffix(path.suffix + ".tmp") if write else None
     out_f = None
@@ -250,8 +257,9 @@ def _filter_ndjson_file(path: Path, start_ms: int, end_ms: int, write: bool, tz:
 
                 if ts is not None and start_ms <= ts < end_ms:
                     kept += 1
+                    last_kept_ms = ts if last_kept_ms is None else max(last_kept_ms, ts)
                     if write and out_f is not None:
-                        out_f.write(json.dumps(obj, separators=(",", ":")) + "\\n")
+                        out_f.write(json.dumps(obj, separators=(",", ":")) + "\n")
 
         except EOFError:
             truncated = True
@@ -296,6 +304,8 @@ def _filter_ndjson_file(path: Path, start_ms: int, end_ms: int, write: bool, tz:
         reason,
         last_seen_ms=last_seen_ms,
         last_seen_local=_fmt_ts(last_seen_ms, tz),
+        last_kept_ms=last_kept_ms,
+        last_kept_local=_fmt_ts(last_kept_ms, tz),
     )
 
 
@@ -311,6 +321,7 @@ def _purge_snapshots(snap_dir: Path, target_day: str, tz: str, write: bool) -> F
     total = kept = 0
     removed_files = 0
     last_seen_ms = None
+    last_kept_ms = None
 
     for p in sorted(snap_dir.iterdir()):
         if not p.is_file():
@@ -335,7 +346,7 @@ def _purge_snapshots(snap_dir: Path, target_day: str, tz: str, write: bool) -> F
             p.unlink()
 
     reason = "clean" if removed_files == 0 else "removed_snapshot_files_outside_day"
-    return FileReport(snap_dir, "snapshots", total, kept, removed_files, reason, last_seen_ms=last_seen_ms, last_seen_local=_fmt_ts(last_seen_ms, tz))
+    return FileReport(snap_dir, "snapshots", total, kept, removed_files, reason, last_seen_ms=last_seen_ms, last_seen_local=_fmt_ts(last_seen_ms, tz), last_kept_ms=last_kept_ms, last_kept_local=_fmt_ts(last_kept_ms, tz))
 
 
 def _iter_target_files(day_dir: Path) -> Iterable[Path]:
@@ -413,10 +424,35 @@ def main() -> int:
     print()
 
     for r in affected:
-        last = r.last_seen_local or "n/a"
-        print(f"- {r.kind:9s} | removed={r.removed:8d} kept={r.kept:8d} total={r.total:8d} | last={last} | {r.reason} | {r.path}")
+        last_seen = r.last_seen_local or "n/a"
+        last_kept = r.last_kept_local or "n/a"
+        print(f"- {r.kind:9s} | removed={r.removed:8d} kept={r.kept:8d} total={r.total:8d} | last_kept={last_kept} last_seen={last_seen} | {r.reason} | {r.path}")
 
     if args.mode == "delete":
+        # If the day is partial (e.g. truncated streams), also remove snapshots after the last kept timestamp
+        # across the kept (in-day) records we observed in this folder.
+        non_snap = [r for r in reports if r.kind in ("csv", "ndjson") and r.last_kept_ms is not None]
+        effective_end_ms = max((r.last_kept_ms for r in non_snap), default=None)
+
+        snap_dir = day_dir / "snapshots"
+        if effective_end_ms is not None and snap_dir.exists():
+            removed_extra = 0
+            for p in snap_dir.iterdir():
+                if not p.is_file() or not p.name.startswith("snapshot_"):
+                    continue
+                parts = p.name.split("_")
+                ts = None
+                if len(parts) >= 2:
+                    try:
+                        ts = int(parts[1])
+                    except Exception:
+                        ts = None
+                if ts is not None and ts > effective_end_ms:
+                    p.unlink()
+                    removed_extra += 1
+            if removed_extra:
+                log(f"Removed {removed_extra} snapshot(s) after last_kept cutoff: {_fmt_ts(effective_end_ms, args.tz)}")
+
         print()
         print("Delete mode completed. Files were rewritten/purged in-place.")
         print("Recommendation: run a replay/backtest for this day to validate integrity.")
