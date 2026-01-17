@@ -185,6 +185,7 @@ def _filter_csv_file(path: Path, start_ms: int, end_ms: int, write: bool) -> Fil
 def _filter_ndjson_file(path: Path, start_ms: int, end_ms: int, write: bool) -> FileReport:
     total = kept = 0
     reason = ""
+    truncated = False
 
     tmp_path = path.with_suffix(path.suffix + ".tmp") if write else None
     out_f = None
@@ -195,30 +196,35 @@ def _filter_ndjson_file(path: Path, start_ms: int, end_ms: int, write: bool) -> 
 
     with _open_text(path, "rt") as f:
         line_idx = 0
-        for line in f:
-            line_idx += 1
-            if line_idx % 500000 == 0:
-                log(f"{path.name}: scanned {line_idx} lines...")
-            line = line.strip()
-            if not line:
-                continue
-            total += 1
-            try:
-                obj = json.loads(line)
-            except Exception:
-                continue
-            if time_key_used is None:
-                time_key_used = _detect_json_time_key(obj)
-            ts = None
-            if time_key_used is not None:
+        try:
+            for line in f:
+                line_idx += 1
+                if line_idx % 500000 == 0:
+                    log(f"{path.name}: scanned {line_idx} lines...")
+
+                line = line.strip()
+                if not line:
+                    continue
+                total += 1
                 try:
-                    ts = int(float(obj.get(time_key_used)))
+                    obj = json.loads(line)
                 except Exception:
-                    ts = None
-            if ts is not None and start_ms <= ts < end_ms:
-                kept += 1
-                if write and out_f is not None:
-                    out_f.write(json.dumps(obj, separators=(",", ":")) + "\n")
+                    continue
+                if time_key_used is None:
+                    time_key_used = _detect_json_time_key(obj)
+                ts = None
+                if time_key_used is not None:
+                    try:
+                        ts = int(float(obj.get(time_key_used)))
+                    except Exception:
+                        ts = None
+                if ts is not None and start_ms <= ts < end_ms:
+                    kept += 1
+                    if write and out_f is not None:
+                        out_f.write(json.dumps(obj, separators=(",", ":")) + "\n")
+        except EOFError:
+            truncated = True
+            log(f"WARNING: {path.name}: gzip stream ended unexpectedly (truncated/corrupt). Proceeding with partial data.")
 
     if write and out_f is not None:
         out_f.flush()
@@ -227,10 +233,13 @@ def _filter_ndjson_file(path: Path, start_ms: int, end_ms: int, write: bool) -> 
     removed = total - kept
     if total == 0:
         reason = "no_lines"
-    elif removed == 0:
+    elif removed == 0 and not truncated:
         reason = "clean"
     else:
-        reason = f"removed_lines_outside_day({time_key_used or 'unknown'})"
+        if truncated:
+            reason = f"gzip_truncated; removed_lines_outside_day({time_key_used or 'unknown'})"
+        else:
+            reason = f"removed_lines_outside_day({time_key_used or 'unknown'})"
 
     if write:
         tmp_path = path.with_suffix(path.suffix + ".tmp")
