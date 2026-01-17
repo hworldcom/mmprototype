@@ -134,6 +134,7 @@ class FileReport:
 def _filter_csv_file(path: Path, start_ms: int, end_ms: int, write: bool, tz: str) -> FileReport:
     total = kept = 0
     reason = ""
+    truncated = False
     last_seen_ms: int | None = None
     last_kept_ms: int | None = None
 
@@ -154,26 +155,33 @@ def _filter_csv_file(path: Path, start_ms: int, end_ms: int, write: bool, tz: st
             writer.writeheader()
 
         row_idx = 0
-        for row in reader:
-            row_idx += 1
-            if row_idx % 500000 == 0:
-                log(f"{path.name}: scanned {row_idx} rows...")
+        try:
+            for row in reader:
+                row_idx += 1
+                if row_idx % 500000 == 0:
+                    log(f"{path.name}: scanned {row_idx} rows...")
 
-            total += 1
-            v = row.get(tcol)
-            try:
-                ts = int(float(v)) if v not in (None, "") else None
-            except Exception:
-                ts = None
+                total += 1
+                v = row.get(tcol)
+                try:
+                    ts = int(float(v)) if v not in (None, "") else None
+                except Exception:
+                    ts = None
 
-            if ts is not None:
-                last_seen_ms = ts if last_seen_ms is None else max(last_seen_ms, ts)
+                if ts is not None:
+                    last_seen_ms = ts if last_seen_ms is None else max(last_seen_ms, ts)
 
-            if ts is not None and start_ms <= ts < end_ms:
-                kept += 1
-                last_kept_ms = ts if last_kept_ms is None else max(last_kept_ms, ts)
-                if write:
-                    writer.writerow(row)  # type: ignore[union-attr]
+                if ts is not None and start_ms <= ts < end_ms:
+                    kept += 1
+                    last_kept_ms = ts if last_kept_ms is None else max(last_kept_ms, ts)
+                    if write:
+                        writer.writerow(row)  # type: ignore[union-attr]
+        except EOFError:
+            truncated = True
+            log(
+                f"WARNING: {path.name}: gzip stream ended unexpectedly (truncated/corrupt). "
+                "Proceeding with partial data."
+            )
 
         if write and out_f is not None:
             out_f.flush()
@@ -182,10 +190,11 @@ def _filter_csv_file(path: Path, start_ms: int, end_ms: int, write: bool, tz: st
     removed = total - kept
     if total == 0:
         reason = "no_rows"
-    elif removed == 0:
+    elif removed == 0 and not truncated:
         reason = "clean"
     else:
-        reason = f"removed_rows_outside_day({tcol})"
+        base = f"removed_rows_outside_day({tcol})"
+        reason = f"gzip_truncated; {base}" if truncated else base
 
     if write:
         tmp_path = path.with_suffix(path.suffix + ".tmp")
@@ -458,7 +467,6 @@ def main() -> int:
         print("Recommendation: run a replay/backtest for this day to validate integrity.")
 
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())
