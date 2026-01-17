@@ -393,7 +393,7 @@ def main() -> int:
     # Snapshots first (separate logic)
     snap_report = _purge_snapshots(day_dir / "snapshots", args.day, args.tz, do_write)
     reports.append(snap_report)
-    log(f"Snapshots: removed={snap_report.removed} kept={snap_report.kept} total={snap_report.total} last_kept={snap_report.last_kept_local or 'n/a'}")
+    log(f"Snapshots {'delete' if do_write else 'scan'}: removed={snap_report.removed} kept={snap_report.kept} total={snap_report.total} last_kept={snap_report.last_kept_local or 'n/a'}")
 
     # Other files
     processed = 0
