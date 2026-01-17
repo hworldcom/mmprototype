@@ -47,6 +47,13 @@ import gzip
 import json
 import os
 from dataclasses import dataclass
+
+from datetime import datetime
+
+def log(msg: str):
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{ts}] {msg}", flush=True)
+
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable, Optional, Tuple
@@ -131,7 +138,11 @@ def _filter_csv_file(path: Path, start_ms: int, end_ms: int, write: bool) -> Fil
             writer = csv.DictWriter(out_f, fieldnames=reader.fieldnames)
             writer.writeheader()
 
+        row_idx = 0
         for row in reader:
+            row_idx += 1
+            if row_idx % 500000 == 0:
+                log(f"{path.name}: scanned {row_idx} rows...")
             total += 1
             v = row.get(tcol)
             try:
@@ -183,7 +194,11 @@ def _filter_ndjson_file(path: Path, start_ms: int, end_ms: int, write: bool) -> 
     time_key_used = None
 
     with _open_text(path, "rt") as f:
+        line_idx = 0
         for line in f:
+            line_idx += 1
+            if line_idx % 500000 == 0:
+                log(f"{path.name}: scanned {line_idx} lines...")
             line = line.strip()
             if not line:
                 continue
@@ -295,6 +310,7 @@ def main() -> int:
     start_ms, end_ms = _day_bounds_ms(args.day, args.tz)
     do_write = args.mode == "delete"
 
+    log(f"Starting purge_non_day_data: mode={args.mode}, symbol={args.symbol}, day={args.day}")
     reports = []
 
     # Snapshots first (separate logic)
