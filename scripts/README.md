@@ -56,3 +56,26 @@ Usage:
 # Preview actions without changing files
 ./scripts/compress_existing_data.sh --dry-run
 ```
+
+## purge_non_day_data.py
+
+Repairs a contaminated day folder by **removing any rows/lines whose timestamps are outside the target day**.
+
+This is intended for cases where the recorder process ran past midnight and continued appending data into
+the startup day directory (e.g., `data/BTCUSDT/20260114/`), contaminating the day's trades/events/diffs.
+
+Modes:
+- `scan` (default): reports what would be removed (no changes)
+- `delete`: rewrites files in-place keeping only records in the target day, and deletes snapshots outside the day
+
+Usage:
+```bash
+# Scan only (no changes)
+python scripts/purge_non_day_data.py --symbol BTCUSDT --day 20260114 --mode scan
+
+# Delete (rewrite/purge in-place)
+python scripts/purge_non_day_data.py --symbol BTCUSDT --day 20260114 --mode delete
+
+# Custom data root (if needed)
+python scripts/purge_non_day_data.py --symbol BTCUSDT --day 20260114 --data-root /mnt/data --mode delete
+```

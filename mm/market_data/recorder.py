@@ -243,6 +243,8 @@ def run_recorder():
     engine = OrderBookSyncEngine()
     resync_count = 0
 
+    window_end_emitted = False
+
     # Telemetry
     proc_t0 = time.time()
     last_hb = time.time()
@@ -277,7 +279,18 @@ def run_recorder():
 
     def heartbeat(force: bool = False):
         nonlocal last_hb
+        nonlocal window_end_emitted
         now_s = time.time()
+        # Hard stop at end of recording window (Berlin time).
+        # This check is in heartbeat so we stop even if depth messages stop.
+        if (not window_end_emitted) and berlin_now() >= end:
+            window_end_emitted = True
+            emit_event("window_end", {"end": end.isoformat()})
+            try:
+                stream.close()
+            except Exception:
+                log.exception("Failed to close stream on window end (heartbeat)")
+            return
         if (not force) and (now_s - last_hb < HEARTBEAT_SEC):
             return
         last_hb = now_s
@@ -311,6 +324,16 @@ def run_recorder():
                         len(engine.buffer), engine.lob.last_update_id)
 
         now_s = time.time()
+        # Hard stop at end of recording window (Berlin time).
+        # This check is in heartbeat so we stop even if depth messages stop.
+        if (not window_end_emitted) and berlin_now() >= end:
+            window_end_emitted = True
+            emit_event("window_end", {"end": end.isoformat()})
+            try:
+                stream.close()
+            except Exception:
+                log.exception("Failed to close stream on window end (heartbeat)")
+            return
         if (now_s - sync_t0) > SYNC_WARN_AFTER_SEC and (now_s - last_sync_warn) > SYNC_WARN_AFTER_SEC:
             last_sync_warn = now_s
             log.warning("Still not synced after %.0fs (buffer=%d)", now_s - sync_t0, len(engine.buffer))
@@ -422,7 +445,7 @@ def run_recorder():
             resync("ws_reconnect")
 
     def on_depth(data, recv_ms: int):
-        nonlocal depth_msg_count, last_depth_event_ms
+        nonlocal depth_msg_count, last_depth_event_ms, window_end_emitted
 
         msg_recv_seq = next_recv_seq()
 
@@ -445,11 +468,19 @@ def run_recorder():
             except Exception:
                 log.exception("Failed writing depth diffs")
 
-        # Stop at end of window
-        #if berlin_now() >= end:
-        #    emit_event("window_end", {"end": end.isoformat()})
-        #    stream.close()
-        #    return
+        # Stop at end of window.
+        #
+        # This must remain enabled in production. If disabled, the recorder will
+        # continue running and will keep writing into the *startup* day directory,
+        # effectively mixing multiple trading days into the same folder.
+        if (not window_end_emitted) and berlin_now() >= end:
+            window_end_emitted = True
+            emit_event("window_end", {"end": end.isoformat()})
+            try:
+                stream.close()
+            except Exception:
+                log.exception("Failed to close stream on window end")
+            return
 
         try:
             result = engine.feed_depth_event(data)
