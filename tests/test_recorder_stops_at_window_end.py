@@ -1,0 +1,116 @@
+import os
+import gzip
+import csv
+from datetime import datetime
+from pathlib import Path
+
+import mm.market_data.recorder as rec
+
+
+class FakeStream:
+    """Minimal BinanceWSStream replacement used for unit testing."""
+
+    def __init__(self, *, ws_url, on_depth, on_trade, on_open, on_status=None, **kwargs):
+        self.ws_url = ws_url
+        self.on_depth = on_depth
+        self.on_trade = on_trade
+        self.on_open = on_open
+        self.on_status = on_status
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+    def run(self):
+        # Simulate immediate open + a single depth message.
+        if self.on_open:
+            self.on_open()
+        # recorder.on_depth expects signature (data, recv_ms)
+        self.on_depth({"e": "depthUpdate", "U": 1, "u": 1, "b": [], "a": []}, 1700000000000)
+        # Return; recorder should then finalize and exit.
+        return
+
+
+class FakeDateTime:
+    """Simple callable that returns a deterministic sequence of datetimes."""
+
+    def __init__(self, dts):
+        self._dts = list(dts)
+        self._i = 0
+
+    def __call__(self):
+        if self._i >= len(self._dts):
+            return self._dts[-1]
+        v = self._dts[self._i]
+        self._i += 1
+        return v
+
+
+def _read_events_csv_gz(path: Path):
+    with gzip.open(path, "rt", encoding="utf-8", newline="") as f:
+        r = csv.DictReader(f)
+        return list(r)
+
+
+def test_recorder_emits_window_end_and_stops(tmp_path, monkeypatch):
+    # Work in isolated folder
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SYMBOL", "BTCUSDT")
+
+    # Force deterministic run_id/event_id by freezing time.time()
+    monkeypatch.setattr(rec.time, "time", lambda: 1700000000.0)
+
+    # Provide a Berlin time sequence:
+    # - First few calls: 21:59 (so recorder starts)
+    # - Subsequent calls: 22:00:01 (so hard stop triggers)
+    base = datetime(2026, 1, 14, 21, 59, 0)
+    after_end = datetime(2026, 1, 14, 22, 0, 1)
+    fake_now = FakeDateTime([
+        base,  # day_str
+        base,  # start
+        base,  # end
+        base,  # now
+        after_end,  # on_open heartbeat check
+        after_end,  # on_depth stop check
+        after_end,  # final heartbeat
+    ])
+    monkeypatch.setattr(rec, "berlin_now", fake_now)
+
+    # Avoid sleeping
+    monkeypatch.setattr(rec.time, "sleep", lambda s: None)
+
+    # Use fake stream
+    monkeypatch.setattr(rec, "BinanceWSStream", FakeStream)
+
+    # Avoid requiring python-binance for REST snapshots in unit tests.
+    def _dummy_record_rest_snapshot(**kwargs):
+        # Return: (lob, path, last_uid)
+        from mm.market_data.local_orderbook import LocalOrderBook
+
+        out = Path(kwargs["snapshots_dir"]) / "snapshot_dummy.csv.gz"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"")
+
+        lob = LocalOrderBook()
+        lob.last_update_id = 0
+        return lob, out, 0
+
+    monkeypatch.setattr(rec, "record_rest_snapshot", _dummy_record_rest_snapshot)
+
+    # Run
+    rec.run_recorder()
+
+    # Verify day folder and events
+    day_dir = tmp_path / "data" / "BTCUSDT" / "20260114"
+    assert day_dir.exists()
+
+    events_path = day_dir / "events_BTCUSDT_20260114.csv.gz"
+    assert events_path.exists()
+
+    rows = _read_events_csv_gz(events_path)
+    types = [r.get("type") for r in rows]
+
+    # Must include window_end and run_stop to prove recorder exits its loop.
+    assert "run_start" in types
+    assert "window_end" in types
+    assert "run_stop" in types

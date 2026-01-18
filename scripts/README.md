@@ -100,19 +100,38 @@ Notes on `purge_non_day_data.py` output:
 - `last_kept`: last timestamp that was **kept** for the target day window
 - `last_seen`: last timestamp that was **readable** in the file (may be in later days if the folder is contaminated)
 
-## align_stream_end_cutoff.py
+## Why these repair scripts exist (what happened)
 
-Repairs **truncated .gz files** (gzip EOFError) by computing a **latest common cutoff timestamp**
-across all timestamped streams in a day folder, then rewriting every stream to end at that cutoff
-(producing valid, properly closed gzip outputs).
+We had an operational incident where recorder containers continued writing into a *single day folder* for multiple calendar days (e.g. `data/BTCUSDT/20260114/` contained records from 2026-01-15/16/17). This can happen if:
 
-This is useful when different streams truncate at different times and you want a consistent dataset.
+- the recorder is started without a hard stop time (end-of-day / window end), or
+- the stop condition is present but not reached due to a bug/regression, or
+- the container is restarted while still pointing at the same day directory.
 
-Usage:
-```bash
-# Scan and show proposed cutoff
-python scripts/align_stream_end_cutoff.py --symbol BTCUSDT --day 20260116 --mode scan
+Separately, some `.gz` files became unreadable with:
 
-# Repair in-place (rewrite to common cutoff + delete snapshots after cutoff)
-python scripts/align_stream_end_cutoff.py --symbol BTCUSDT --day 20260116 --mode delete
-```
+- `EOFError: Compressed file ended before the end-of-stream marker was reached`
+
+This indicates the gzip stream was cut off mid-write (e.g. container killed, host reboot, out-of-disk, or abrupt process termination). The readable prefix is valid, but the file is not properly closed.
+
+### Why this is dangerous
+
+Cross-day contamination and truncated gzip streams can corrupt downstream workflows:
+
+- calibration (exposure/fills counts and intensity curves)
+- replay/backtest integrity (book state reconstruction and event alignment)
+- operational monitoring (false resync storms)
+
+### What the scripts do
+
+- `split_mixed_day_data.py`: helps separate mixed multi-day folders into per-day folders.
+- `purge_non_day_data.py`: scans a day folder and (optionally) rewrites each file so it contains only rows/lines within the requested day. It also prunes snapshots outside the day window. It is designed to continue even if `.gz` inputs are truncated.
+- `align_stream_end_cutoff.py`: repairs truncated `.gz` inputs by finding the **latest common cutoff timestamp** across all streams (intersection), then rewriting every stream to end at that cutoff and producing valid gzip outputs. This is useful when different streams truncate at different times.
+
+### Permissions note (Docker)
+
+If your recorder runs in Docker as root (default), it may create root-owned files in `data/` on the host. The repair scripts rewrite files in-place (create `*.tmp` next to the originals), so your host user must have write permissions. Recommended fix:
+
+- `sudo chown -R <user>:<user> data/<SYMBOL>`
+
+Long-term improvement is to run containers with `--user $(id -u):$(id -g)`.
