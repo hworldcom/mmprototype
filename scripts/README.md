@@ -57,6 +57,22 @@ Usage:
 ./scripts/compress_existing_data.sh --dry-run
 ```
 
+
+## split_mixed_day_data.py
+
+Repairs a mixed-day recording folder when the recorder kept running past its intended window and wrote multiple days into the startup day directory (e.g., `data/BTCUSDT/20260114`).
+
+It splits rows/lines into new per-day folders based on `recv_time_ms` (Berlin time) and writes outputs as `.gz`.
+
+Usage:
+```bash
+# Write fixed data under data_split/ (default)
+python scripts/split_mixed_day_data.py --symbol BTCUSDT --source-day 20260114
+
+# Choose a custom output root
+python scripts/split_mixed_day_data.py --symbol BTCUSDT --source-day 20260114 --out-root /tmp/data_fixed
+```
+
 ## purge_non_day_data.py
 
 Repairs a contaminated day folder by **removing any rows/lines whose timestamps are outside the target day**.
@@ -78,4 +94,25 @@ python scripts/purge_non_day_data.py --symbol BTCUSDT --day 20260114 --mode dele
 
 # Custom data root (if needed)
 python scripts/purge_non_day_data.py --symbol BTCUSDT --day 20260114 --data-root /mnt/data --mode delete
+```
+
+Notes on `purge_non_day_data.py` output:
+- `last_kept`: last timestamp that was **kept** for the target day window
+- `last_seen`: last timestamp that was **readable** in the file (may be in later days if the folder is contaminated)
+
+## align_stream_end_cutoff.py
+
+Repairs **truncated .gz files** (gzip EOFError) by computing a **latest common cutoff timestamp**
+across all timestamped streams in a day folder, then rewriting every stream to end at that cutoff
+(producing valid, properly closed gzip outputs).
+
+This is useful when different streams truncate at different times and you want a consistent dataset.
+
+Usage:
+```bash
+# Scan and show proposed cutoff
+python scripts/align_stream_end_cutoff.py --symbol BTCUSDT --day 20260116 --mode scan
+
+# Repair in-place (rewrite to common cutoff + delete snapshots after cutoff)
+python scripts/align_stream_end_cutoff.py --symbol BTCUSDT --day 20260116 --mode delete
 ```
