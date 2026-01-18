@@ -49,12 +49,25 @@ def load_snapshot_csv(path: Path) -> LocalOrderBook:
       run_id,event_id,side,price,qty,lastUpdateId
     """
     import csv
+    import gzip
 
     bids = []
     asks = []
     last_uid = None
 
-    with path.open("r", newline="") as f:
+    # GZ-only policy for market data snapshots.
+    if not str(path).endswith('.csv.gz'):
+        raise FileNotFoundError(
+            f"Snapshot must be compressed (.csv.gz). Got: {path}. "
+            f"Run scripts/compress_existing_data.sh for this day."
+        )
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Missing compressed snapshot: {path}. "
+            f"Run scripts/compress_existing_data.sh for this day."
+        )
+
+    with gzip.open(path, 'rt', newline='') as f:
         r = csv.DictReader(f)
         for row in r:
             side = row["side"]
@@ -169,9 +182,14 @@ def replay_day(
                 info = _load_snapshot_from_event(ev.details_json)
                 if info:
                     _, p_str = info
-                    lob = load_snapshot_csv(Path(p_str))
+                    p = Path(p_str)
+                    # Recorder legacy may emit an uncompressed .csv path in the event;
+                    # the canonical on-disk format is .csv.gz.
+                    if str(p).endswith('.csv') and not str(p).endswith('.csv.gz'):
+                        p = p.with_suffix(p.suffix + '.gz')
+                    lob = load_snapshot_csv(p)
                     engine.adopt_snapshot(lob)
-                    _validate_book_state(engine.lob, context=f"snapshot {Path(p_str).name}")
+                    _validate_book_state(engine.lob, context=f"snapshot {p.name}")
                     stats.snapshots_loaded += 1
             push_next(event_it, "event")
 
