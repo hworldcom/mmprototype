@@ -56,25 +56,25 @@ def test_recorder_emits_window_end_and_stops(tmp_path, monkeypatch):
     # Work in isolated folder
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("SYMBOL", "BTCUSDT")
+    monkeypatch.setenv("WINDOW_START_HHMM", "21:59")
+    monkeypatch.setenv("WINDOW_END_HHMM", "22:00")
+    monkeypatch.setenv("WINDOW_END_DAY_OFFSET", "0")
 
     # Force deterministic run_id/event_id by freezing time.time()
     monkeypatch.setattr(rec.time, "time", lambda: 1700000000.0)
 
-    # Provide a Berlin time sequence:
-    # - First few calls: 21:59 (so recorder starts)
+    # Provide a deterministic time sequence:
+    # - First call: 21:59 (so recorder starts)
     # - Subsequent calls: 22:00:01 (so hard stop triggers)
     base = datetime(2026, 1, 14, 21, 59, 0)
     after_end = datetime(2026, 1, 14, 22, 0, 1)
     fake_now = FakeDateTime([
-        base,  # day_str
-        base,  # start
-        base,  # end
         base,  # now
         after_end,  # on_open heartbeat check
         after_end,  # on_depth stop check
         after_end,  # final heartbeat
     ])
-    monkeypatch.setattr(rec, "berlin_now", fake_now)
+    monkeypatch.setattr(rec, "window_now", fake_now)
 
     # Avoid sleeping
     monkeypatch.setattr(rec.time, "sleep", lambda s: None)
@@ -114,3 +114,62 @@ def test_recorder_emits_window_end_and_stops(tmp_path, monkeypatch):
     assert "run_start" in types
     assert "window_end" in types
     assert "run_stop" in types
+
+
+def test_recorder_buffered_warns_without_unbound_error(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SYMBOL", "BTCUSDT")
+    monkeypatch.setenv("WINDOW_START_HHMM", "21:59")
+    monkeypatch.setenv("WINDOW_END_HHMM", "22:00")
+    monkeypatch.setenv("WINDOW_END_DAY_OFFSET", "0")
+
+    monkeypatch.setattr(rec.time, "time", lambda: 1700000000.0)
+    monkeypatch.setattr(rec.time, "sleep", lambda s: None)
+
+    base = datetime(2026, 1, 14, 21, 59, 0)
+    after_end = datetime(2026, 1, 14, 22, 0, 1)
+    fake_now = FakeDateTime([base, base, after_end, after_end])
+    monkeypatch.setattr(rec, "window_now", fake_now)
+
+    monkeypatch.setattr(rec, "BinanceWSStream", FakeStream)
+
+    class FakeResult:
+        action = "buffered"
+        details = "buffered_for_test"
+
+    class FakeLob:
+        last_update_id = 0
+
+    class FakeEngine:
+        def __init__(self):
+            self.depth_synced = False
+            self.snapshot_loaded = True
+            self.lob = FakeLob()
+            self.buffer = []
+
+        def adopt_snapshot(self, lob):
+            self.lob = lob
+
+        def reset_for_resync(self):
+            self.depth_synced = False
+            self.buffer = []
+
+        def feed_depth_event(self, _data):
+            return FakeResult()
+
+    monkeypatch.setattr(rec, "OrderBookSyncEngine", FakeEngine)
+
+    def _dummy_record_rest_snapshot(**kwargs):
+        from mm.market_data.local_orderbook import LocalOrderBook
+
+        out = Path(kwargs["snapshots_dir"]) / "snapshot_dummy.csv.gz"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"")
+
+        lob = LocalOrderBook()
+        lob.last_update_id = 0
+        return lob, out, 0
+
+    monkeypatch.setattr(rec, "record_rest_snapshot", _dummy_record_rest_snapshot)
+
+    rec.run_recorder()

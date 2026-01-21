@@ -4,8 +4,14 @@ from pathlib import Path
 
 
 def day_str(recorder_mod) -> str:
-    # Recorder uses Berlin-local day for folder naming
-    return recorder_mod.berlin_now().strftime("%Y%m%d")
+    now = recorder_mod.window_now()
+    window_start, window_end = recorder_mod.compute_window(now)
+    if now < window_start:
+        prev_start = window_start - recorder_mod.timedelta(days=1)
+        prev_end = window_end - recorder_mod.timedelta(days=1)
+        if now <= prev_end:
+            window_start = prev_start
+    return window_start.strftime("%Y%m%d")
 
 
 def day_dir(tmp_path: Path, recorder_mod, symbol: str) -> Path:

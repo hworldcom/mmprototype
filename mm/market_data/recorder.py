@@ -6,6 +6,7 @@ import time
 import json
 import gzip
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -60,6 +61,25 @@ WINDOW_END_DAY_OFFSET = int(os.getenv("WINDOW_END_DAY_OFFSET", "1"))
 
 def window_now():
     return datetime.now(ZoneInfo(WINDOW_TZ))
+
+
+@dataclass
+class RecorderState:
+    recv_seq: int = 0
+    event_id: int = 0
+    epoch_id: int = 0
+    resync_count: int = 0
+    ws_open_count: int = 0
+    window_end_emitted: bool = False
+    last_hb: float = 0.0
+    sync_t0: float = 0.0
+    last_sync_warn: float = 0.0
+    depth_msg_count: int = 0
+    trade_msg_count: int = 0
+    ob_rows_written: int = 0
+    tr_rows_written: int = 0
+    last_depth_event_ms: int | None = None
+    last_trade_event_ms: int | None = None
 
 
 def _parse_hhmm(value: str, label: str) -> tuple[int, int]:
@@ -131,24 +151,14 @@ def run_recorder():
 
     # Run-scoped ids for audit and file naming
     run_id = int(time.time() * 1000)
-    event_id = int(time.time() * 1000)  # or run_id
-
-    epoch_id = 0  # increments on each (re)sync epoch, useful for replay alignment
-
-    # Global receive sequence. This is incremented for every recorded message
-    # (depth diff, trade, and internal recorder events) so that replay can
-    # establish a deterministic total order even when recv_time_ms ties occur.
-    recv_seq = 0
 
     def next_recv_seq() -> int:
-        nonlocal recv_seq
-        recv_seq += 1
-        return recv_seq
+        state.recv_seq += 1
+        return state.recv_seq
 
     def next_event_id() -> int:
-        nonlocal event_id
-        event_id += 1
-        return event_id
+        state.event_id += 1
+        return state.event_id
 
     # Outputs
     ob_path = day_dir / f"orderbook_ws_depth_{symbol}_{day_str}.csv.gz"
@@ -277,22 +287,16 @@ def run_recorder():
         log.info("Diffs out:       %s", diff_path)
 
     engine = OrderBookSyncEngine()
-    resync_count = 0
 
-    window_end_emitted = False
+    state = RecorderState(
+        event_id=int(time.time() * 1000),
+        last_hb=time.time(),
+        sync_t0=time.time(),
+        last_sync_warn=time.time(),
+    )
 
     # Telemetry
     proc_t0 = time.time()
-    last_hb = time.time()
-    sync_t0 = time.time()
-    last_sync_warn = time.time()
-
-    depth_msg_count = 0
-    trade_msg_count = 0
-    ob_rows_written = 0
-    tr_rows_written = 0
-    last_depth_event_ms = None
-    last_trade_event_ms = None
 
     def emit_event(ev_type: str, details: dict | str) -> int:
         # Avoid failing during shutdown if events file is already closed
@@ -303,33 +307,31 @@ def run_recorder():
         ts_recv_ms = int(time.time() * 1000)
         ts_recv_seq = next_recv_seq()
         details_s = json.dumps(details, ensure_ascii=False) if isinstance(details, dict) else str(details)
-        ev_w.writerow([eid, ts_recv_ms, ts_recv_seq, run_id, ev_type, epoch_id, details_s])
+        ev_w.writerow([eid, ts_recv_ms, ts_recv_seq, run_id, ev_type, state.epoch_id, details_s])
         ev_f.flush()
         return eid
 
     def write_gap(event: str, details: str):
         ts_recv_ms = int(time.time() * 1000)
         ts_recv_seq = next_recv_seq()
-        gap_w.writerow([ts_recv_ms, ts_recv_seq, run_id, epoch_id, event, details])
+        gap_w.writerow([ts_recv_ms, ts_recv_seq, run_id, state.epoch_id, event, details])
         gap_f.flush()
 
     def heartbeat(force: bool = False):
-        nonlocal last_hb
-        nonlocal window_end_emitted
         now_s = time.time()
-        # Hard stop at end of recording window (Berlin time).
+        # Hard stop at end of recording window.
         # This check is in heartbeat so we stop even if depth messages stop.
-        if (not window_end_emitted) and window_now() >= end:
-            window_end_emitted = True
+        if (not state.window_end_emitted) and window_now() >= end:
+            state.window_end_emitted = True
             emit_event("window_end", {"end": end.isoformat()})
             try:
                 stream.close()
             except Exception:
                 log.exception("Failed to close stream on window end (heartbeat)")
             return
-        if (not force) and (now_s - last_hb < HEARTBEAT_SEC):
+        if (not force) and (now_s - state.last_hb < HEARTBEAT_SEC):
             return
-        last_hb = now_s
+        state.last_hb = now_s
         uptime = now_s - proc_t0
 
         log.info(
@@ -340,19 +342,17 @@ def run_recorder():
             engine.depth_synced,
             engine.snapshot_loaded,
             engine.lob.last_update_id,
-            depth_msg_count,
-            trade_msg_count,
-            ob_rows_written,
-            tr_rows_written,
+            state.depth_msg_count,
+            state.trade_msg_count,
+            state.ob_rows_written,
+            state.tr_rows_written,
             len(engine.buffer),
-            last_depth_event_ms,
-            last_trade_event_ms,
-            epoch_id,
+            state.last_depth_event_ms,
+            state.last_trade_event_ms,
+            state.epoch_id,
         )
 
     def warn_not_synced():
-        nonlocal last_sync_warn
-        nonlocal window_end_emitted
         if engine.depth_synced:
             return
 
@@ -361,22 +361,21 @@ def run_recorder():
                         len(engine.buffer), engine.lob.last_update_id)
 
         now_s = time.time()
-        # Hard stop at end of recording window (Berlin time).
+        # Hard stop at end of recording window.
         # This check is in heartbeat so we stop even if depth messages stop.
-        if (not window_end_emitted) and window_now() >= end:
-            window_end_emitted = True
+        if (not state.window_end_emitted) and window_now() >= end:
+            state.window_end_emitted = True
             emit_event("window_end", {"end": end.isoformat()})
             try:
                 stream.close()
             except Exception:
                 log.exception("Failed to close stream on window end (heartbeat)")
             return
-        if (now_s - sync_t0) > SYNC_WARN_AFTER_SEC and (now_s - last_sync_warn) > SYNC_WARN_AFTER_SEC:
-            last_sync_warn = now_s
-            log.warning("Still not synced after %.0fs (buffer=%d)", now_s - sync_t0, len(engine.buffer))
+        if (now_s - state.sync_t0) > SYNC_WARN_AFTER_SEC and (now_s - state.last_sync_warn) > SYNC_WARN_AFTER_SEC:
+            state.last_sync_warn = now_s
+            log.warning("Still not synced after %.0fs (buffer=%d)", now_s - state.sync_t0, len(engine.buffer))
 
     def fetch_snapshot(tag: str):
-        nonlocal sync_t0, last_sync_warn, epoch_id
         client = None
         if record_rest_snapshot is ORIGINAL_RECORD_REST_SNAPSHOT:
             if Client is None:
@@ -400,17 +399,16 @@ def run_recorder():
         )
 
         engine.adopt_snapshot(lob)
-        sync_t0 = time.time()
-        last_sync_warn = time.time()
+        state.sync_t0 = time.time()
+        state.last_sync_warn = time.time()
 
         emit_event("snapshot_loaded", {"tag": tag, "lastUpdateId": last_uid, "path": str(path)})
         log.info("Snapshot %s loaded lastUpdateId=%s (%s)", tag, last_uid, path)
 
     def resync(reason: str):
-        nonlocal resync_count, epoch_id
-        resync_count += 1
-        epoch_id += 1
-        tag = f"resync_{resync_count:06d}"
+        state.resync_count += 1
+        state.epoch_id += 1
+        tag = f"resync_{state.resync_count:06d}"
 
         log.warning("Resync triggered: %s", reason)
         write_gap("resync_start", reason)
@@ -431,12 +429,11 @@ def run_recorder():
         emit_event("resync_done", {"tag": tag, "lastUpdateId": engine.lob.last_update_id})
 
     def write_topn(event_time_ms: int, recv_ms: int, recv_seq: int):
-        nonlocal ob_rows_written
         bids, asks = engine.lob.top_n(DEPTH_LEVELS)
         bids += [(0.0, 0.0)] * (DEPTH_LEVELS - len(bids))
         asks += [(0.0, 0.0)] * (DEPTH_LEVELS - len(asks))
 
-        row = [event_time_ms, recv_ms, recv_seq, run_id, epoch_id]
+        row = [event_time_ms, recv_ms, recv_seq, run_id, state.epoch_id]
         for i in range(DEPTH_LEVELS):
             bp, bq = bids[i]
             ap, aq = asks[i]
@@ -448,18 +445,14 @@ def run_recorder():
             ]
 
         ob_writer.write_row(row)
-        ob_rows_written += 1
-
-    ws_open_count = 0
+        state.ob_rows_written += 1
 
     def on_open():
-        nonlocal epoch_id
-        nonlocal ws_open_count
-        ws_open_count += 1
+        state.ws_open_count += 1
 
         # First open: initial snapshot. Any subsequent open is treated as a reconnect and triggers a resync.
-        if ws_open_count == 1:
-            epoch_id = 0
+        if state.ws_open_count == 1:
+            state.epoch_id = 0
             emit_event(
                 "ws_open",
                 {
@@ -477,17 +470,15 @@ def run_recorder():
                 emit_event("fatal", {"reason": "initial_snapshot_failed", "error": str(e)})
                 stream.close()
         else:
-            emit_event("ws_reconnect_open", {"ws_url": ws_url, "open_count": ws_open_count})
+            emit_event("ws_reconnect_open", {"ws_url": ws_url, "open_count": state.ws_open_count})
             # Any reconnect implies potential missed diffs; always resync.
             resync("ws_reconnect")
 
     def on_depth(data, recv_ms: int):
-        nonlocal depth_msg_count, last_depth_event_ms, window_end_emitted
-
         msg_recv_seq = next_recv_seq()
 
-        depth_msg_count += 1
-        last_depth_event_ms = int(data.get("E", 0))
+        state.depth_msg_count += 1
+        state.last_depth_event_ms = int(data.get("E", 0))
 
         # Always store raw diffs for replay, even when not synced
         if diff_writer is not None:
@@ -510,8 +501,8 @@ def run_recorder():
         # This must remain enabled in production. If disabled, the recorder will
         # continue running and will keep writing into the *startup* day directory,
         # effectively mixing multiple trading days into the same folder.
-        if (not window_end_emitted) and window_now() >= end:
-            window_end_emitted = True
+        if (not state.window_end_emitted) and window_now() >= end:
+            state.window_end_emitted = True
             emit_event("window_end", {"end": end.isoformat()})
             try:
                 stream.close()
@@ -541,9 +532,8 @@ def run_recorder():
             heartbeat()
 
     def on_trade(data: dict, recv_ms: int):
-        nonlocal trade_msg_count, tr_rows_written, last_trade_event_ms
-        trade_msg_count += 1
-        last_trade_event_ms = int(data.get("E", 0))
+        state.trade_msg_count += 1
+        state.last_trade_event_ms = int(data.get("E", 0))
 
         msg_recv_seq = next_recv_seq()
 
@@ -561,7 +551,7 @@ def run_recorder():
                     int(data["m"]),
                 ]
             )
-            tr_rows_written += 1
+            state.tr_rows_written += 1
         except Exception:
             log.exception("Unhandled exception in on_trade (message=%s)", data)
         finally:

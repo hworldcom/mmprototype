@@ -7,6 +7,7 @@ import mm.market_data.recorder as recorder_mod
 from tests._paths import orderbook_path as get_orderbook_path
 from tests._paths import trades_path as get_trades_path
 from tests._paths import events_path as get_events_path
+from tests._paths import day_str as get_day_str
 
 
 class DummyLob:
@@ -27,7 +28,7 @@ class DummyLob:
 
 def test_headers_written_once_across_restarts(monkeypatch, tmp_path):
     fixed_now = datetime(2025, 12, 15, 12, 0, 0, tzinfo=ZoneInfo("Europe/Berlin"))
-    monkeypatch.setattr(recorder_mod, "berlin_now", lambda: fixed_now)
+    monkeypatch.setattr(recorder_mod, "window_now", lambda: fixed_now)
     monkeypatch.setenv("SYMBOL", "ETHUSDT")
 
     orig_path = recorder_mod.Path
@@ -62,7 +63,7 @@ def test_headers_written_once_across_restarts(monkeypatch, tmp_path):
 
     monkeypatch.setattr(recorder_mod, "BinanceWSStream", FakeStream)
 
-    date = recorder_mod.datetime.utcnow().strftime("%Y%m%d")
+    date = get_day_str(recorder_mod)
 
     # Run 1
     monkeypatch.setattr(recorder_mod.time, "time", lambda: 1.0)

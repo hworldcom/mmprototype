@@ -13,7 +13,7 @@ def test_recorder_writes_diffs_and_resync(monkeypatch, tmp_path):
     monkeypatch.setenv("SYMBOL", "BTCUSDT")
 
     fixed_now = datetime(2025, 12, 16, 9, 0, 0, tzinfo=ZoneInfo("Europe/Berlin"))
-    monkeypatch.setattr(recorder_mod, "berlin_now", lambda: fixed_now)
+    monkeypatch.setattr(recorder_mod, "window_now", lambda: fixed_now)
 
     # --- Redirect Path("data") -> tmp_path/data ---
     original_path = recorder_mod.Path
@@ -93,7 +93,7 @@ def test_recorder_writes_diffs_and_resync(monkeypatch, tmp_path):
     assert any(t.startswith("resync_") for t in calls["tags"])
 
     # --- Assert outputs exist ---
-    day_str = fixed_now.strftime("%Y%m%d")
+    day_str = recorder_mod.compute_window(recorder_mod.window_now())[0].strftime("%Y%m%d")
     base_dir = tmp_path / "data" / "BTCUSDT" / day_str
 
     # Diffs file

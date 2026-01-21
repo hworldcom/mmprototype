@@ -49,7 +49,7 @@ def test_global_recv_seq_is_unique_across_message_types(monkeypatch, tmp_path):
     """Recorder should emit a single global recv_seq across depth, trade, and events."""
 
     fixed_now = datetime(2025, 12, 15, 12, 0, 0, tzinfo=ZoneInfo("Europe/Berlin"))
-    monkeypatch.setattr(recorder_mod, "berlin_now", lambda: fixed_now)
+    monkeypatch.setattr(recorder_mod, "window_now", lambda: fixed_now)
 
     symbol = "BTCUSDT"
     monkeypatch.setenv("SYMBOL", symbol)
@@ -112,7 +112,7 @@ def test_global_recv_seq_is_unique_across_message_types(monkeypatch, tmp_path):
 
     recorder_mod.run_recorder()
 
-    day = fixed_now.strftime("%Y%m%d")
+    day = recorder_mod.compute_window(recorder_mod.window_now())[0].strftime("%Y%m%d")
     base = tmp_path / "data" / symbol / day
     events_path = base / f"events_{symbol}_{day}.csv.gz"
     trades_path = base / f"trades_ws_{symbol}_{day}.csv.gz"

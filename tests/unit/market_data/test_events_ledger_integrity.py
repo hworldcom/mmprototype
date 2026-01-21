@@ -27,7 +27,7 @@ class DummyLob:
 def test_events_contains_run_start_snapshot_synced(monkeypatch, tmp_path):
     # Keep within recording window
     fixed_now = datetime(2025, 12, 15, 12, 0, 0, tzinfo=ZoneInfo("Europe/Berlin"))
-    monkeypatch.setattr(recorder_mod, "berlin_now", lambda: fixed_now)
+    monkeypatch.setattr(recorder_mod, "window_now", lambda: fixed_now)
 
     monkeypatch.setenv("SYMBOL", "ETHUSDT")
 

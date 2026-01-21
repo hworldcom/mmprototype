@@ -23,7 +23,7 @@ class DummyLob:
 def test_appends_and_run_id_changes(monkeypatch, tmp_path):
     # Fixed Berlin time inside recording window
     fixed_now = datetime(2025, 12, 15, 12, 0, 0, tzinfo=ZoneInfo("Europe/Berlin"))
-    monkeypatch.setattr(recorder_mod, "berlin_now", lambda: fixed_now)
+    monkeypatch.setattr(recorder_mod, "window_now", lambda: fixed_now)
 
     symbol = "ETHUSDT"
     monkeypatch.setenv("SYMBOL", symbol)
@@ -75,7 +75,7 @@ def test_appends_and_run_id_changes(monkeypatch, tmp_path):
     monkeypatch.setattr(recorder_mod.time, "time", lambda: 2.0)  # run_id=2000
     recorder_mod.run_recorder()
 
-    day = fixed_now.strftime("%Y%m%d")
+    day = recorder_mod.compute_window(recorder_mod.window_now())[0].strftime("%Y%m%d")
     ob_path = tmp_path / "data" / symbol / day / f"orderbook_ws_depth_{symbol}_{day}.csv.gz"
 
     with gzip.open(ob_path, 'rt', encoding='utf-8', newline='') as f:

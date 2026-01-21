@@ -25,7 +25,7 @@ class DummyLob:
 
 def test_no_orderbook_rows_until_synced(monkeypatch, tmp_path):
     fixed_now = datetime(2025, 12, 15, 12, 0, 0, tzinfo=ZoneInfo("Europe/Berlin"))
-    monkeypatch.setattr(recorder_mod, "berlin_now", lambda: fixed_now)
+    monkeypatch.setattr(recorder_mod, "window_now", lambda: fixed_now)
     monkeypatch.setenv("SYMBOL", "ETHUSDT")
 
     orig_path = recorder_mod.Path
@@ -68,7 +68,7 @@ def test_no_orderbook_rows_until_synced(monkeypatch, tmp_path):
     recorder_mod.run_recorder()
 
     symbol = "ETHUSDT"
-    day = recorder_mod.berlin_now().strftime("%Y%m%d")
+    day = recorder_mod.compute_window(recorder_mod.window_now())[0].strftime("%Y%m%d")
     day_dir = tmp_path / "data" / symbol / day
     orderbook_path = day_dir / f"orderbook_ws_depth_{symbol}_{day}.csv.gz"
 

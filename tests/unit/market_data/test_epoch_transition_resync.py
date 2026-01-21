@@ -34,7 +34,7 @@ class DummyLob:
 
 def test_epoch_id_increments_after_resync(monkeypatch, tmp_path):
     fixed_now = datetime(2025, 12, 15, 12, 0, 0, tzinfo=ZoneInfo("Europe/Berlin"))
-    monkeypatch.setattr(recorder_mod, "berlin_now", lambda: fixed_now)
+    monkeypatch.setattr(recorder_mod, "window_now", lambda: fixed_now)
     monkeypatch.setenv("SYMBOL", "ETHUSDT")
 
     # Redirect data/
