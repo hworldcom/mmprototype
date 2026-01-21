@@ -7,7 +7,7 @@ import json
 import gzip
 import logging
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 """Market data recorder.
@@ -52,9 +52,37 @@ INSECURE_TLS = os.getenv("INSECURE_TLS", "0").strip() in ("1", "true", "True")
 # If True, write raw WS depth diffs for production-faithful replay
 STORE_DEPTH_DIFFS = True
 
+WINDOW_TZ = os.getenv("WINDOW_TZ", "Europe/Berlin")
+WINDOW_START_HHMM = os.getenv("WINDOW_START_HHMM", "00:00")
+WINDOW_END_HHMM = os.getenv("WINDOW_END_HHMM", "00:15")
+WINDOW_END_DAY_OFFSET = int(os.getenv("WINDOW_END_DAY_OFFSET", "1"))
 
-def berlin_now():
-    return datetime.now(ZoneInfo("Europe/Berlin"))
+
+def window_now():
+    return datetime.now(ZoneInfo(WINDOW_TZ))
+
+
+def _parse_hhmm(value: str, label: str) -> tuple[int, int]:
+    try:
+        hour_str, minute_str = value.strip().split(":")
+        hour = int(hour_str)
+        minute = int(minute_str)
+    except Exception as exc:
+        raise RuntimeError(f"{label} must be in HH:MM format (got {value!r}).") from exc
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        raise RuntimeError(f"{label} must be a valid 24h time (got {value!r}).")
+    return hour, minute
+
+
+def compute_window(now: datetime) -> tuple[datetime, datetime]:
+    start_h, start_m = _parse_hhmm(WINDOW_START_HHMM, "WINDOW_START_HHMM")
+    end_h, end_m = _parse_hhmm(WINDOW_END_HHMM, "WINDOW_END_HHMM")
+
+    start = now.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
+    end = now.replace(hour=end_h, minute=end_m, second=0, microsecond=0) + timedelta(days=WINDOW_END_DAY_OFFSET)
+    if end <= start:
+        end += timedelta(days=1)
+    return start, end
 
 
 def run_recorder():
@@ -62,8 +90,17 @@ def run_recorder():
     if not symbol:
         raise RuntimeError("SYMBOL environment variable is required (e.g. SYMBOL=BTCUSDT).")
 
-    # Per-day folder (Berlin date)
-    day_str = berlin_now().strftime("%Y%m%d")
+    now = window_now()
+    window_start, window_end = compute_window(now)
+    if now < window_start:
+        prev_start = window_start - timedelta(days=1)
+        prev_end = window_end - timedelta(days=1)
+        if now <= prev_end:
+            window_start = prev_start
+            window_end = prev_end
+
+    # Per-day folder (window start date)
+    day_str = window_start.strftime("%Y%m%d")
     symbol_dir = Path("data") / symbol
     day_dir = symbol_dir / day_str
     day_dir.mkdir(parents=True, exist_ok=True)
@@ -77,13 +114,12 @@ def run_recorder():
     log = logging.getLogger("market_data.recorder")
     log.info("Recorder logging to %s", log_path)
 
-    # Recording window in Berlin time (8:00 -> 22:00)
-    start = berlin_now().replace(hour=8, minute=0, second=0, microsecond=0)
-    end = berlin_now().replace(hour=22, minute=0, second=0, microsecond=0)
+    # Recording window in configured timezone.
+    start = window_start
+    end = window_end
 
-    # Current wall-clock time (Berlin). Used to decide whether to sleep until
+    # Current wall-clock time. Used to decide whether to sleep until
     # the recording window starts.
-    now = berlin_now()
     if now > end:
         log.info("Now is past end of window (%s). Exiting.", end.isoformat())
         return
@@ -283,7 +319,7 @@ def run_recorder():
         now_s = time.time()
         # Hard stop at end of recording window (Berlin time).
         # This check is in heartbeat so we stop even if depth messages stop.
-        if (not window_end_emitted) and berlin_now() >= end:
+        if (not window_end_emitted) and window_now() >= end:
             window_end_emitted = True
             emit_event("window_end", {"end": end.isoformat()})
             try:
@@ -316,6 +352,7 @@ def run_recorder():
 
     def warn_not_synced():
         nonlocal last_sync_warn
+        nonlocal window_end_emitted
         if engine.depth_synced:
             return
 
@@ -326,7 +363,7 @@ def run_recorder():
         now_s = time.time()
         # Hard stop at end of recording window (Berlin time).
         # This check is in heartbeat so we stop even if depth messages stop.
-        if (not window_end_emitted) and berlin_now() >= end:
+        if (not window_end_emitted) and window_now() >= end:
             window_end_emitted = True
             emit_event("window_end", {"end": end.isoformat()})
             try:
@@ -473,7 +510,7 @@ def run_recorder():
         # This must remain enabled in production. If disabled, the recorder will
         # continue running and will keep writing into the *startup* day directory,
         # effectively mixing multiple trading days into the same folder.
-        if (not window_end_emitted) and berlin_now() >= end:
+        if (not window_end_emitted) and window_now() >= end:
             window_end_emitted = True
             emit_event("window_end", {"end": end.isoformat()})
             try:

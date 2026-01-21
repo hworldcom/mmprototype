@@ -62,6 +62,10 @@ docker run --rm \
 | `SYMBOL` (env) | Trading pair to subscribe (e.g., `BTCUSDT`). Required. |
 | `DEPTH_LEVELS` | Number of L2 levels persisted per book snapshot row. |
 | `STORE_DEPTH_DIFFS` | Toggle gzip’d NDJSON logging of raw WS depth diffs for replay. |
+| `WINDOW_TZ` (env) | Timezone used for start/end windows (default: `Europe/Berlin`). |
+| `WINDOW_START_HHMM` (env) | Window start time in 24h `HH:MM` (default: `00:00`). |
+| `WINDOW_END_HHMM` (env) | Window end time in 24h `HH:MM` (default: `00:15`). |
+| `WINDOW_END_DAY_OFFSET` (env) | Day offset added to the end time (default: `1`). Use `1` for next-day cutoff. |
 | `HEARTBEAT_SEC`, `SYNC_WARN_AFTER_SEC`, `MAX_BUFFER_WARN` | Telemetry cadence and warning thresholds. |
 | `ORDERBOOK_BUFFER_ROWS`, `TRADES_BUFFER_ROWS`, `BUFFER_FLUSH_INTERVAL_SEC` | Tune throughput vs. fsync pressure. |
 
