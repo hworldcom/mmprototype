@@ -199,17 +199,22 @@ If it takes much longer than expected, inspect:
 
 ---
 
-## Performance note and next step (virtual probes)
+## Performance note (virtual probes)
 
-The current schedule calibration path can be computationally heavy because it runs many small “paper backtests” per window.
+Schedule calibration can be computationally heavy when it runs many small “paper backtests” per window.
 
-The planned optimization is a **virtual-probe calibration engine**:
+To address this, the project includes a **virtual-probe calibration engine** (enabled with `--calib-engine virtual`):
 
 - no orders are sent to a `PaperExchange`
-- probes are conceptual quotes at `(mid ± δ*tick)` held for a dwell time
-- fills are counted directly from trade-cross events while probes are active
+- probes are conceptual quotes at `(mid_anchor ± δ*tick)`
+- the mid is *anchored* and refreshed on a dwell timer and/or a mid-move threshold
+- exposure accrues **independently for each configured delta** (all deltas are evaluated simultaneously)
+- fills are counted directly from trade-cross events against the probe prices
 
-This keeps the Poisson statistics (hits/exposure) but removes most of the order-management overhead.
+This keeps the Poisson statistics (hits/exposure) while removing most of the order-management overhead.
+
+Note: because each delta accrues exposure independently, for a window of length `T` and `N` deltas, it is expected that
+`sum(exposure_s) ≈ N*T`.
 
 ---
 
