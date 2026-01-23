@@ -268,6 +268,17 @@ def build_schedule(
         train_start = int(seg_start - train_ms)
         train_end = int(seg_start)
 
+        # Window header (useful for debugging + correlating with artifacts).
+        log.info(
+            "[CALIB] window=%d/%d seg=%s–%s train=%s–%s",
+            step_idx + 1,
+            n_steps,
+            _fmt_hhmm(seg_start),
+            _fmt_hhmm(seg_end),
+            _fmt_hhmm(train_start),
+            _fmt_hhmm(train_end),
+        )
+
         window_dir = calib_root / f"train_{train_start}_{train_end}"
         fit = _calibrate_poisson_window(
             data_root=data_root,
@@ -294,6 +305,20 @@ def build_schedule(
             calib_engine=calib_engine,
         )
 
+        # Guardrail: with simultaneous-delta virtual probes, total exposure should
+        # roughly scale with n_deltas * window_length.
+        window_s = float(train_end - train_start) / 1000.0
+        expected_exposure_s = float(len(deltas)) * window_s
+        observed_exposure_s = float(fit.get("exposure_s_total", 0.0) or 0.0)
+        if expected_exposure_s > 0 and observed_exposure_s < 0.8 * expected_exposure_s:
+            log.warning(
+                "[CALIB] exposure_s_total suspiciously low: observed=%.1f expected≈%.1f (n_deltas=%d window_s=%.1f)",
+                observed_exposure_s,
+                expected_exposure_s,
+                int(len(deltas)),
+                window_s,
+            )
+
         # Quality gate: even if fit returned usable, require enough distinct deltas.
         usable = bool(fit.get("usable")) and int(fit.get("n_deltas_usable", 0)) >= int(min_usable_deltas)
         reason = "OK" if usable else str(fit.get("reason", "insufficient_deltas"))
@@ -312,6 +337,20 @@ def build_schedule(
                 # carry_forward
                 A, k = float(last_good["A"]), float(last_good["k"])
                 reason = f"FALLBACK_CARRY_FORWARD::{reason}"
+
+        # Window fit summary (high-signal debugging line)
+        log.info(
+            "[CALIB] fit train_end=%s usable=%s A=%.6g k=%.6g fills_usable=%s fills_total=%s exposure_s=%.1f n_deltas_usable=%s reason=%s",
+            _fmt_hhmm(train_end),
+            bool(usable),
+            float(A),
+            float(k),
+            str(fit.get("fills_usable_total", fit.get("fills_total", 0))),
+            str(fit.get("fills_total", 0)),
+            float(fit.get("exposure_s_total", 0.0) or 0.0),
+            str(fit.get("n_deltas_usable", 0)),
+            str(reason),
+        )
 
         schedule.append(
             {
@@ -436,6 +475,36 @@ def main() -> None:
         args.yyyymmdd,
         run_id,
         args.tick_size,
+    )
+
+    # Log all relevant configuration in a single, greppable line.
+    log.info(
+        "Calibration config: engine=%s symbol=%s day=%s tick=%.6g "
+        "train_window_min=%s step_min=%s fit_method=%s poisson_dt_ms=%s "
+        "deltas=%s dwell_ms=%s mid_move_threshold_ticks=%s min_exposure_s=%.6g max_delta_ticks=%s "
+        "quote_qty=%.6g maker_fee_rate=%.6g order_latency_ms=%s cancel_latency_ms=%s requote_interval_ms=%s "
+        "fallback_policy=%s min_usable_deltas=%s simultaneous_deltas=%s",
+        args.calib_engine,
+        args.symbol,
+        args.yyyymmdd,
+        float(args.tick_size),
+        args.train_window_min,
+        args.step_min,
+        args.fit_method,
+        args.poisson_dt_ms,
+        deltas,
+        args.dwell_ms,
+        (args.mid_move_threshold_ticks if args.mid_move_threshold_ticks > 0 else None),
+        float(args.min_exposure_s),
+        args.max_delta_ticks,
+        float(args.quote_qty),
+        float(args.maker_fee_rate),
+        args.order_latency_ms,
+        args.cancel_latency_ms,
+        args.requote_interval_ms,
+        args.fallback_policy,
+        args.min_usable_deltas,
+        bool(str(args.calib_engine).strip().lower() == "virtual"),
     )
 
     run_base = out_root / "calibration" / "schedules" / args.symbol / f"{args.yyyymmdd}_{run_id}"
