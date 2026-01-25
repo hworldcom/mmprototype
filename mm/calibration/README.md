@@ -27,13 +27,9 @@ Backtests consume calibration artifacts (e.g., `poisson_fit.json`) and write int
 
 ## Two supported calibration designs
 
-### Design A — Ladder sweep (probing)
-A deterministic calibration quote model cycles through a list of deltas (ticks), holding each for a dwell period.
+### Calibration (virtual probes)
 
-- Quotes: `bid = mid - δ*tick`, `ask = mid + δ*tick`
-- Holds for `dwell_ms`, optionally repositions if mid moves too far.
-
-Use when you want the most statistically efficient estimate of the full curve.
+Schedule calibration uses **virtual probes** only. Rotating / ladder-sweep calibration has been removed to avoid partitioned exposure across deltas.
 
 ### Design B — Fixed-spread multi-run
 Runs multiple independent backtests, each with a fixed delta (ticks).  
@@ -47,12 +43,12 @@ Use when you want an operationally simple calibration method.
 
 > Note: commands assume you run from the repo root.
 
-### A) Ladder sweep calibration
+### A) Virtual-probes calibration
 
 ```bash
 export SYMBOL=BTCUSDT
 export OUT_DIR=out
-export CALIB_METHOD=ladder
+export CALIB_ENGINE=virtual
 export CALIB_DELTAS="1,2,3,5,8,13"
 export CALIB_DWELL_MS=60000
 export CALIB_MID_MOVE_THRESHOLD_TICKS=2
@@ -252,7 +248,7 @@ The artifact you use later in backtests. Example:
   "k": 1.35,
   "dt_ms": 100,
   "symbol": "BTCUSDT",
-  "method": "ladder",
+  "calib_engine": "virtual",
   "deltas": [1,2,3,5,8,13]
 }
 ```
@@ -284,12 +280,10 @@ python -m mm.runner_backtest
 Calibration code lives in `mm/calibration/`.
 
 - `mm/calibration/runner_calibration.py`
-  - Entry point. Reads env vars, chooses Design A or B, executes runs, aggregates, fits `(A,k)`, writes outputs.
+  - Entry point. Reads env vars, chooses Design (virtual probes) or B, executes runs, aggregates, fits `(A,k)`, writes outputs.
 
-- `mm/calibration/quotes/calibration_ladder.py`
-  - Implements the ladder sweep quote generator (Design A).
+  - Implements the ladder sweep quote generator (Design (virtual probes)).
 
-- `mm/calibration/quotes/fixed_spread.py`
   - Implements constant-delta quoting (used by Design B runs).
 
 - `mm/calibration/exposure.py`

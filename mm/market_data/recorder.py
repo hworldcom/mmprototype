@@ -53,14 +53,15 @@ INSECURE_TLS = os.getenv("INSECURE_TLS", "0").strip() in ("1", "true", "True")
 # If True, write raw WS depth diffs for production-faithful replay
 STORE_DEPTH_DIFFS = True
 
-WINDOW_TZ = os.getenv("WINDOW_TZ", "Europe/Berlin")
-WINDOW_START_HHMM = os.getenv("WINDOW_START_HHMM", "00:00")
-WINDOW_END_HHMM = os.getenv("WINDOW_END_HHMM", "00:15")
-WINDOW_END_DAY_OFFSET = int(os.getenv("WINDOW_END_DAY_OFFSET", "1"))
-
-
 def window_now():
-    return datetime.now(ZoneInfo(WINDOW_TZ))
+    """Current wall-clock time in the configured recording timezone.
+
+    We intentionally read environment variables at call time so unit tests
+    (and production launch scripts) can override the window parameters
+    without requiring a module reload.
+    """
+    tz = os.getenv("WINDOW_TZ", "Europe/Berlin")
+    return datetime.now(ZoneInfo(tz))
 
 
 @dataclass
@@ -95,11 +96,17 @@ def _parse_hhmm(value: str, label: str) -> tuple[int, int]:
 
 
 def compute_window(now: datetime) -> tuple[datetime, datetime]:
-    start_h, start_m = _parse_hhmm(WINDOW_START_HHMM, "WINDOW_START_HHMM")
-    end_h, end_m = _parse_hhmm(WINDOW_END_HHMM, "WINDOW_END_HHMM")
+    # Read env at runtime (not import time) so tests and launchers can set
+    # the recording window via environment variables.
+    start_hhmm = os.getenv("WINDOW_START_HHMM", "00:00")
+    end_hhmm = os.getenv("WINDOW_END_HHMM", "00:15")
+    end_day_offset = int(os.getenv("WINDOW_END_DAY_OFFSET", "1"))
+
+    start_h, start_m = _parse_hhmm(start_hhmm, "WINDOW_START_HHMM")
+    end_h, end_m = _parse_hhmm(end_hhmm, "WINDOW_END_HHMM")
 
     start = now.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
-    end = now.replace(hour=end_h, minute=end_m, second=0, microsecond=0) + timedelta(days=WINDOW_END_DAY_OFFSET)
+    end = now.replace(hour=end_h, minute=end_m, second=0, microsecond=0) + timedelta(days=end_day_offset)
     if end <= start:
         end += timedelta(days=1)
     return start, end
