@@ -12,13 +12,13 @@ from typing import Dict, Any, List, Optional, Tuple
 
 import pandas as pd
 
-from mm.backtest.backtester import backtest_day, BacktestRunStats
+from mm.backtest.backtester import backtest_day, Any
 from mm.backtest.io import find_trades_file, iter_trades_csv
 from mm.backtest.fills.trade_driven import TradeDrivenFillModel
 from mm.backtest.fills.poisson import TimeVaryingPoissonFillModel
 from mm.calibration.exposure import compute_bucketed_exposure, summarize_bucketed_exposure
 from mm.calibration.poisson_fit import fit_poisson_mle, fit_log_linear
-from mm.calibration.quotes.calibration_ladder import CalibrationLadderQuoteModel
+from mm.calibration.virtual_probes import run_virtual_ladder_window, summarize_bucketed_exposure
 from mm.logging_config import setup_run_logging
 
 log = logging.getLogger(__name__)
@@ -73,57 +73,36 @@ def _calibrate_poisson_window(
     time_max_ms: int,
     out_dir: Path,
 ) -> Dict[str, Any]:
-    """Run a controlled ladder sweep in [time_min_ms, time_max_ms) and fit A,k."""
+    """Fit Poisson (A,k) for a single training window using **virtual probes**.
+
+    Rotating / ladder-sweep calibration has been removed. We always evaluate all
+    configured deltas **simultaneously** within the window.
+    """
     _ensure_dir(out_dir)
 
-    quote_model = CalibrationLadderQuoteModel(
-        qty=quote_qty,
+    # NOTE: quote_qty, fees, and latencies are irrelevant for virtual probes; kept
+    # in the signature for backward compatibility with walkforward wiring.
+    res = run_virtual_ladder_window(
+        data_root=data_root,
+        symbol=symbol,
+        yyyymmdd=yyyymmdd,
         tick_size=tick_size,
         deltas=deltas,
         dwell_ms=dwell_ms,
         mid_move_threshold_ticks=mid_move_threshold_ticks,
-        two_sided=True,
-    )
-
-    stats: BacktestRunStats = backtest_day(
-        root=data_root,
-        symbol=symbol,
-        yyyymmdd=yyyymmdd,
-        out_dir=out_dir,
         time_min_ms=time_min_ms,
         time_max_ms=time_max_ms,
-        quote_model_name="avellaneda_stoikov",
-        fill_model_name="trade_driven",
-        quote_model_override=quote_model,
-        fill_model_override=TradeDrivenFillModel(allow_partial=True, max_fill_qty=1e18),
-        quote_qty=quote_qty,
-        maker_fee_rate=maker_fee_rate,
-        order_latency_ms=order_latency_ms,
-        cancel_latency_ms=cancel_latency_ms,
-        requote_interval_ms=requote_interval_ms,
-        order_ttl_ms=None,
-        refresh_interval_ms=None,
-        tick_size=tick_size,
-        initial_cash=initial_cash,
-        initial_inventory=initial_inventory,
-    )
-
-    points = compute_bucketed_exposure(
-        orders_path=Path(stats.orders_path),
-        fills_path=Path(stats.fills_path),
-        state_path=Path(stats.state_path),
-        tick_size=tick_size,
-        min_delta_ticks=min(deltas),
         max_delta_ticks=max(max_delta_ticks, max(deltas)),
         min_exposure_s=min_exposure_s,
     )
+    points = res.points
     points.to_csv(out_dir / "calibration_points.csv", index=False)
 
-    summary = summarize_bucketed_exposure(points)
+    summary = res.stats
+    _write_json(out_dir / "virtual_probe_stats.json", summary)
 
     fit_df = points[points["usable"]].copy()
     if fit_df.empty:
-        # For QA/monitoring: include totals even if no usable points.
         return {
             "usable": False,
             "reason": "no_usable_points",
@@ -133,8 +112,9 @@ def _calibrate_poisson_window(
             "train_end_ms": int(time_max_ms),
             "exposure_s_total": float(summary["exposure_s_total"]),
             "fills_total": int(summary["fills_total"]),
-            "fills_usable_total": int(summary["fills_usable_total"]),
-            "n_deltas_usable": int(summary["n_deltas_usable"]),
+            "fills_usable_total": int(summary.get("fills_usable_total", 0)),
+            "n_deltas_usable": int(summary.get("n_deltas_usable", 0)),
+            "calib_engine": "virtual",
         }
 
     if fit_method == "log_linear":
@@ -153,10 +133,12 @@ def _calibrate_poisson_window(
         "train_end_ms": int(time_max_ms),
         "exposure_s_total": float(summary["exposure_s_total"]),
         "fills_total": int(summary["fills_total"]),
+        "fills_usable_total": int(summary.get("fills_usable_total", 0)),
+        "n_deltas_usable": int(summary.get("n_deltas_usable", 0)),
+        "calib_engine": "virtual",
     }
     _write_json(out_dir / "poisson_fit.json", fit_out)
     return fit_out
-
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Walk-forward rolling calibration and continuous backtest (piecewise params)")

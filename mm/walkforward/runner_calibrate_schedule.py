@@ -31,7 +31,6 @@ from mm.backtest.fills.trade_driven import TradeDrivenFillModel
 from mm.backtest.backtester import backtest_day
 from mm.calibration.exposure import compute_bucketed_exposure, summarize_bucketed_exposure
 from mm.calibration.poisson_fit import fit_poisson_mle, fit_log_linear
-from mm.calibration.quotes.calibration_ladder import CalibrationLadderQuoteModel
 from mm.calibration.virtual_probes import run_virtual_ladder_window
 from mm.logging_config import setup_run_logging
 
@@ -89,8 +88,8 @@ def _calibrate_poisson_window(
     _ensure_dir(out_dir)
 
     calib_engine = str(calib_engine or "paper").strip().lower()
-    if calib_engine not in {"paper", "virtual"}:
-        raise ValueError(f"Unknown calib_engine={calib_engine!r} (expected 'paper' or 'virtual')")
+    if calib_engine not in {"virtual"}:
+        raise ValueError(f"Unknown calib_engine={calib_engine!r} (expected 'virtual')")
 
     if calib_engine == "virtual":
         # Order-free virtual probes. Significantly cheaper than placing/cancelling
@@ -112,62 +111,6 @@ def _calibrate_poisson_window(
         points.to_csv(out_dir / "calibration_points.csv", index=False)
         summary = res.stats
         _write_json(out_dir / "virtual_probe_stats.json", summary)
-    else:
-        quote_model = CalibrationLadderQuoteModel(
-            qty=quote_qty,
-            tick_size=tick_size,
-            deltas=deltas,
-            dwell_ms=dwell_ms,
-            mid_move_threshold_ticks=mid_move_threshold_ticks,
-            two_sided=True,
-        )
-
-        # We backtest with a trade-driven fill model to observe "probe" fills.
-
-        # Calibration runs need two-sided probes to be placeable even on spot.
-        # If initial_inventory is 0 and PaperExchange is configured to suppress unfunded quotes,
-        # the first SELL probe can be suppressed, biasing the ladder. We therefore apply
-        # calibration-only "funding" floors that are comfortably above probe usage.
-        calib_initial_cash = max(float(initial_cash or 0.0), 1e6)
-        _calib_min_inv = float(quote_qty) * max(100.0, 10.0 * float(len(deltas)))
-        calib_initial_inventory = max(float(initial_inventory or 0.0), _calib_min_inv)
-
-        stats = backtest_day(
-            root=data_root,
-            symbol=symbol,
-            yyyymmdd=yyyymmdd,
-            out_dir=out_dir,
-            time_min_ms=time_min_ms,
-            time_max_ms=time_max_ms,
-            quote_model_name="avellaneda_stoikov",  # ignored due to override
-            fill_model_name="trade_driven",
-            quote_model_override=quote_model,
-            fill_model_override=TradeDrivenFillModel(allow_partial=True, max_fill_qty=1e18),
-            quote_qty=quote_qty,
-            maker_fee_rate=maker_fee_rate,
-            order_latency_ms=order_latency_ms,
-            cancel_latency_ms=cancel_latency_ms,
-            requote_interval_ms=requote_interval_ms,
-            order_ttl_ms=None,
-            refresh_interval_ms=None,
-            tick_size=tick_size,
-            initial_cash=calib_initial_cash,
-            initial_inventory=calib_initial_inventory,
-        )
-
-        points = compute_bucketed_exposure(
-            orders_path=Path(stats.orders_path),
-            fills_path=Path(stats.fills_path),
-            state_path=Path(stats.state_path),
-            tick_size=tick_size,
-            min_delta_ticks=min(deltas),
-            max_delta_ticks=max(max_delta_ticks, max(deltas)),
-            min_exposure_s=min_exposure_s,
-        )
-        points.to_csv(out_dir / "calibration_points.csv", index=False)
-
-        summary = summarize_bucketed_exposure(points)
-
     fit_df = points[points["usable"]].copy()
     if fit_df.empty:
         return {
@@ -421,12 +364,9 @@ def main() -> None:
 
     ap.add_argument(
         "--calib-engine",
-        choices=["paper", "virtual"],
-        default=os.getenv("CALIB_ENGINE", "paper"),
-        help=(
-            "Calibration execution engine. 'paper' uses PaperExchange and writes full orders/fills/state logs. "
-            "'virtual' uses virtual probes (no order objects) and is significantly faster."
-        ),
+        choices=["virtual"],
+        default=os.getenv("CALIB_ENGINE", "virtual"),
+        help=("Calibration execution engine. Only 'virtual' is supported (order-free virtual probes)."),
     )
     ap.add_argument("--initial-cash", type=float, default=float(os.getenv("INITIAL_CASH", "1000")))
     ap.add_argument("--initial-inventory", type=float, default=float(os.getenv("INITIAL_INVENTORY", "0")))
