@@ -38,10 +38,13 @@ still used for realistic end-to-end backtests.
 from __future__ import annotations
 
 import logging
+import bisect
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
+import numpy as np
 import pandas as pd
 
 from mm.backtest.replay import replay_day
@@ -97,13 +100,16 @@ def run_virtual_ladder_window(
         raise ValueError("deltas must be non-empty")
 
     deltas_sorted = sorted({int(d) for d in deltas})
+    n_deltas = len(deltas_sorted)
+    deltas_arr = np.array(deltas_sorted, dtype=int)
 
-    # Per-delta accumulators.
-    exposure_s: Dict[int, float] = {int(d): 0.0 for d in deltas_sorted}
-    fill_events: Dict[int, int] = {int(d): 0 for d in deltas_sorted}
-    filled_qty: Dict[int, float] = {int(d): 0.0 for d in deltas_sorted}
-    bid_hits: Dict[int, int] = {int(d): 0 for d in deltas_sorted}
-    ask_hits: Dict[int, int] = {int(d): 0 for d in deltas_sorted}
+    # Per-delta accumulators (vectorized for speed).
+    exposure_s = np.zeros(n_deltas, dtype=float)
+    fill_events = np.zeros(n_deltas, dtype=int)
+    filled_qty = np.zeros(n_deltas, dtype=float)
+    bid_hits = np.zeros(n_deltas, dtype=int)
+    ask_hits = np.zeros(n_deltas, dtype=int)
+    valid_mask = (deltas_arr >= 0) & (deltas_arr <= int(max_delta_ticks))
 
     # Anchor state.
     last_switch_ms: Optional[int] = None
@@ -130,11 +136,11 @@ def run_virtual_ladder_window(
         last_switch_ms = int(now_ms)
         anchor_mid = float(mid)
 
-    def probe_prices(delta_ticks: int) -> Tuple[Optional[float], Optional[float]]:
-        if anchor_mid is None:
-            return None, None
-        d = float(delta_ticks) * float(tick_size)
-        return float(anchor_mid) - d, float(anchor_mid) + d
+    def _slice_end(max_delta: float) -> int:
+        if max_delta < 0:
+            return 0
+        capped = min(int(max_delta), int(max_delta_ticks))
+        return bisect.bisect_right(deltas_sorted, capped)
 
     def on_tick(recv_ms: int, engine) -> None:
         nonlocal last_mid, last_tick_ms
@@ -149,9 +155,8 @@ def run_virtual_ladder_window(
         # within the window has established anchor_mid).
         if last_tick_ms is not None and anchor_mid is not None:
             dt_s = max(0.0, float(int(recv_ms) - int(last_tick_ms)) / 1000.0)
-            for d in deltas_sorted:
-                if 0 <= d <= int(max_delta_ticks):
-                    exposure_s[d] += dt_s
+            if dt_s > 0:
+                exposure_s[valid_mask] += dt_s
 
         # Re-anchor if needed.
         if should_reanchor(int(recv_ms), float(mid)):
@@ -169,25 +174,27 @@ def run_virtual_ladder_window(
         px = float(tr.price)
         qty = float(tr.qty)
 
-        # Count hits for each delta. We treat each trade that crosses a probe as
-        # one fill *event* for that delta.
-        for d in deltas_sorted:
-            if d < 0 or d > int(max_delta_ticks):
-                continue
-            bid_p, ask_p = probe_prices(d)
-            if bid_p is None or ask_p is None:
-                continue
+        if tick_size <= 0:
+            return
 
-            hit = False
-            if px <= bid_p:
-                bid_hits[d] += 1
-                hit = True
-            if px >= ask_p:
-                ask_hits[d] += 1
-                hit = True
-            if hit:
-                fill_events[d] += 1
-                filled_qty[d] += qty
+        # Count hits for each delta. We treat each trade that crosses a probe as
+        # one fill *event* for that delta. Conditions reduce to delta <= threshold.
+        max_delta_bid = math.floor((float(anchor_mid) - px) / float(tick_size))
+        max_delta_ask = math.floor((px - float(anchor_mid)) / float(tick_size))
+
+        bid_end = _slice_end(max_delta_bid)
+        if bid_end > 0:
+            bid_hits[:bid_end] += 1
+
+        ask_end = _slice_end(max_delta_ask)
+        if ask_end > 0:
+            ask_hits[:ask_end] += 1
+
+        max_any = max(max_delta_bid, max_delta_ask)
+        any_end = _slice_end(max_any)
+        if any_end > 0:
+            fill_events[:any_end] += 1
+            filled_qty[:any_end] += qty
 
     # Replay only for the window. Note: replay_day still parses the full files;
     # windowing is enforced by on_tick/on_trade time gates.
@@ -204,15 +211,14 @@ def run_virtual_ladder_window(
     # If we ended with an active anchor, accrue exposure until time_max_ms.
     if last_tick_ms is not None and anchor_mid is not None:
         dt_s = max(0.0, float(int(time_max_ms) - int(last_tick_ms)) / 1000.0)
-        for d in deltas_sorted:
-            if 0 <= d <= int(max_delta_ticks):
-                exposure_s[d] += dt_s
+        if dt_s > 0:
+            exposure_s[valid_mask] += dt_s
 
     rows: List[Dict[str, object]] = []
-    for d in deltas_sorted:
-        ex = float(exposure_s.get(d, 0.0))
-        fe = int(fill_events.get(d, 0))
-        fq = float(filled_qty.get(d, 0.0))
+    for i, d in enumerate(deltas_sorted):
+        ex = float(exposure_s[i])
+        fe = int(fill_events[i])
+        fq = float(filled_qty[i])
         lam = (fe / ex) if ex > 0 else float("nan")
         rows.append(
             {
@@ -223,8 +229,8 @@ def run_virtual_ladder_window(
                 "lambda_events_per_s": lam,
                 "lambda_qty_per_s": (fq / ex) if ex > 0 else float("nan"),
                 "n_orders": 0,  # virtual engine does not create order objects
-                "bid_hits": int(bid_hits.get(d, 0)),
-                "ask_hits": int(ask_hits.get(d, 0)),
+                "bid_hits": int(bid_hits[i]),
+                "ask_hits": int(ask_hits[i]),
             }
         )
 
