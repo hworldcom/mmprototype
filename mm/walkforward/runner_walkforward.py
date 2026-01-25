@@ -13,6 +13,7 @@ from typing import Dict, Any, List, Optional, Tuple
 import pandas as pd
 
 from mm.backtest.backtester import backtest_day, Any
+from mm.backtest.replay import load_replay_buffers, ReplayBuffers
 from mm.backtest.io import find_trades_file, iter_trades_csv
 from mm.backtest.fills.trade_driven import TradeDrivenFillModel
 from mm.backtest.fills.poisson import TimeVaryingPoissonFillModel
@@ -72,6 +73,7 @@ def _calibrate_poisson_window(
     time_min_ms: int,
     time_max_ms: int,
     out_dir: Path,
+    replay_buffers: ReplayBuffers | None = None,
 ) -> Dict[str, Any]:
     """Fit Poisson (A,k) for a single training window using **virtual probes**.
 
@@ -94,6 +96,7 @@ def _calibrate_poisson_window(
         time_max_ms=time_max_ms,
         max_delta_ticks=max(max_delta_ticks, max(deltas)),
         min_exposure_s=min_exposure_s,
+        replay_buffers=replay_buffers,
     )
     points = res.points
     points.to_csv(out_dir / "calibration_points.csv", index=False)
@@ -221,6 +224,9 @@ def main() -> None:
     if not deltas:
         raise SystemExit("--deltas must contain at least one integer")
 
+    log.info("[CALIB] preloading replay buffers for %s %s", args.symbol, args.yyyymmdd)
+    replay_buffers = load_replay_buffers(data_root, args.symbol, args.yyyymmdd)
+
     while t < day_end_ms:
         seg_start = int(t)
         seg_end = int(min(t + step_ms, day_end_ms))
@@ -250,6 +256,7 @@ def main() -> None:
             time_min_ms=train_start,
             time_max_ms=train_end,
             out_dir=window_dir,
+            replay_buffers=replay_buffers,
         )
 
         if fit.get("usable"):

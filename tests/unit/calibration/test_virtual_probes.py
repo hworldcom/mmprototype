@@ -139,3 +139,33 @@ def test_virtual_probes_exposure_accrues_for_all_deltas(monkeypatch, tmp_path: P
 
     assert int(pts.loc[1, "ask_hits"]) == 0
     assert bool(pts.loc[1, "usable"]) is True
+
+
+def test_virtual_probes_passes_replay_buffers(monkeypatch, tmp_path: Path) -> None:
+    from mm.calibration import virtual_probes as vp
+
+    sentinel = object()
+    seen = {"replay_buffers": None}
+
+    def _fake_replay_day(*, replay_buffers=None, **_kwargs):
+        seen["replay_buffers"] = replay_buffers
+        return {"replay_done": True}
+
+    monkeypatch.setattr(vp, "replay_day", _fake_replay_day)
+
+    vp.run_virtual_ladder_window(
+        data_root=tmp_path,
+        symbol="BTCUSDT",
+        yyyymmdd="20250101",
+        tick_size=1.0,
+        deltas=[1],
+        dwell_ms=60_000,
+        mid_move_threshold_ticks=None,
+        time_min_ms=0,
+        time_max_ms=1000,
+        max_delta_ticks=10,
+        min_exposure_s=0.0,
+        replay_buffers=sentinel,
+    )
+
+    assert seen["replay_buffers"] is sentinel

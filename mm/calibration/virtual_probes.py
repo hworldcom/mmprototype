@@ -47,7 +47,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
-from mm.backtest.replay import replay_day
+from mm.backtest.replay import replay_day, ReplayBuffers
 from mm.backtest.io import Trade
 
 log = logging.getLogger("calibration.virtual_probes")
@@ -88,6 +88,7 @@ def run_virtual_ladder_window(
     time_max_ms: int,
     max_delta_ticks: int = 50,
     min_exposure_s: float = 5.0,
+    replay_buffers: ReplayBuffers | None = None,
 ) -> VirtualProbeResult:
     """Run virtual probes over a (time_min_ms, time_max_ms) window.
 
@@ -206,6 +207,7 @@ def run_virtual_ladder_window(
         on_trade=on_trade,
         time_min_ms=int(time_min_ms),
         time_max_ms=int(time_max_ms),
+        replay_buffers=replay_buffers,
     )
 
     # If we ended with an active anchor, accrue exposure until time_max_ms.

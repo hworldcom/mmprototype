@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import bisect
 import heapq
 import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Iterator, Optional, Tuple
+from typing import Callable, Dict, Iterator, Optional, Tuple, List
 
 from mm.market_data.local_orderbook import LocalOrderBook
 from mm.market_data.sync_engine import OrderBookSyncEngine
@@ -26,6 +27,43 @@ class ReplayStats:
     gaps: int = 0
     applied: int = 0
     synced: int = 0
+
+
+@dataclass(frozen=True)
+class ReplayBuffers:
+    depth: List[DepthDiff]
+    trades: List[Trade]
+    events: List[EventRow]
+    depth_recv_ms: List[int]
+    trade_recv_ms: List[int]
+    event_recv_ms: List[int]
+
+
+def load_replay_buffers(root: Path, symbol: str, yyyymmdd: str) -> ReplayBuffers:
+    """Parse the day files once and keep them in memory for reuse."""
+    depth_path = find_depth_diffs_file(root, symbol, yyyymmdd)
+    trades_path = find_trades_file(root, symbol, yyyymmdd)
+    events_path = find_events_file(root, symbol, yyyymmdd)
+
+    depth = list(iter_depth_diffs(depth_path))
+    trades = list(iter_trades_csv(trades_path))
+    events = list(iter_events_csv(events_path))
+
+    return ReplayBuffers(
+        depth=depth,
+        trades=trades,
+        events=events,
+        depth_recv_ms=[int(d.recv_ms) for d in depth],
+        trade_recv_ms=[int(t.recv_ms) for t in trades],
+        event_recv_ms=[int(e.recv_ms) for e in events],
+    )
+
+
+def _iter_up_to(items: List[object], recv_ms_list: List[int], time_max_ms: Optional[int]) -> Iterator[object]:
+    if time_max_ms is None:
+        return iter(items)
+    end = bisect.bisect_left(recv_ms_list, int(time_max_ms))
+    return iter(items[:end])
 
 
 def _load_snapshot_from_event(details_json: str) -> Optional[Tuple[int, str]]:
@@ -126,6 +164,7 @@ def replay_day(
     on_trade: Optional[Callable[[Trade, OrderBookSyncEngine], None]] = None,
     time_min_ms: Optional[int] = None,
     time_max_ms: Optional[int] = None,
+    replay_buffers: ReplayBuffers | None = None,
 ) -> ReplayStats:
     """
     Reconstructs a local book and replays events in recv_ms time order.
@@ -139,13 +178,18 @@ def replay_day(
     """
     stats = ReplayStats()
 
-    depth_path = find_depth_diffs_file(root, symbol, yyyymmdd)
-    trades_path = find_trades_file(root, symbol, yyyymmdd)
-    events_path = find_events_file(root, symbol, yyyymmdd)
+    if replay_buffers is None:
+        depth_path = find_depth_diffs_file(root, symbol, yyyymmdd)
+        trades_path = find_trades_file(root, symbol, yyyymmdd)
+        events_path = find_events_file(root, symbol, yyyymmdd)
 
-    depth_it = iter_depth_diffs(depth_path)
-    trade_it = iter_trades_csv(trades_path)
-    event_it = iter_events_csv(events_path)
+        depth_it = iter_depth_diffs(depth_path)
+        trade_it = iter_trades_csv(trades_path)
+        event_it = iter_events_csv(events_path)
+    else:
+        depth_it = _iter_up_to(replay_buffers.depth, replay_buffers.depth_recv_ms, time_max_ms)
+        trade_it = _iter_up_to(replay_buffers.trades, replay_buffers.trade_recv_ms, time_max_ms)
+        event_it = _iter_up_to(replay_buffers.events, replay_buffers.event_recv_ms, time_max_ms)
 
     engine = OrderBookSyncEngine()
 

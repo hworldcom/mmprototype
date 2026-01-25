@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 
 from mm.backtest.io import find_trades_file, iter_trades_csv
+from mm.backtest.replay import load_replay_buffers, ReplayBuffers
 from mm.backtest.fills.trade_driven import TradeDrivenFillModel
 from mm.backtest.backtester import backtest_day
 from mm.calibration.exposure import compute_bucketed_exposure, summarize_bucketed_exposure
@@ -83,6 +84,7 @@ def _calibrate_poisson_window(
     time_max_ms: int,
     out_dir: Path,
     calib_engine: str = "paper",
+    replay_buffers: ReplayBuffers | None = None,
 ) -> Dict[str, Any]:
     """Run a controlled ladder sweep in [time_min_ms, time_max_ms) and fit A,k."""
     _ensure_dir(out_dir)
@@ -106,6 +108,7 @@ def _calibrate_poisson_window(
             time_max_ms=time_max_ms,
             max_delta_ticks=max(max_delta_ticks, max(deltas)),
             min_exposure_s=min_exposure_s,
+            replay_buffers=replay_buffers,
         )
         points = res.points
         points.to_csv(out_dir / "calibration_points.csv", index=False)
@@ -205,6 +208,11 @@ def build_schedule(
     schedule: List[Dict[str, Any]] = []
     last_good: Optional[Dict[str, Any]] = None
 
+    replay_buffers: ReplayBuffers | None = None
+    if str(calib_engine).strip().lower() == "virtual":
+        log.info("[CALIB] preloading replay buffers for %s %s", symbol, yyyymmdd)
+        replay_buffers = load_replay_buffers(data_root, symbol, yyyymmdd)
+
     while t < day_end_ms:
         seg_start = int(t)
         seg_end = int(min(t + step_ms, day_end_ms))
@@ -246,6 +254,7 @@ def build_schedule(
             time_max_ms=train_end,
             out_dir=window_dir,
             calib_engine=calib_engine,
+            replay_buffers=replay_buffers,
         )
 
         # Guardrail: with simultaneous-delta virtual probes, total exposure should
