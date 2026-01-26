@@ -59,6 +59,103 @@ def _read_day_time_bounds_ms(data_root: Path, symbol: str, yyyymmdd: str) -> Tup
     return mn, mx
 
 
+def _generate_run_id() -> str:
+    return datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+
+
+def _load_json(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _initial_schedule_start_ms(day_start_ms: int, train_ms: int, step_ms: int) -> int:
+    t = int(day_start_ms + train_ms)
+    offset = (t - day_start_ms) % step_ms
+    if offset:
+        t += (step_ms - offset)
+    return int(t)
+
+
+def _find_last_complete_index(schedule: List[Dict[str, Any]]) -> int:
+    last_good = -1
+    for idx, seg in enumerate(schedule):
+        calib_dir_value = str(seg.get("calib_dir") or "")
+        if not calib_dir_value:
+            break
+        calib_dir = Path(calib_dir_value)
+        points_path = calib_dir / "calibration_points.csv"
+        stats_path = calib_dir / "virtual_probe_stats.json"
+        if not points_path.exists() and not stats_path.exists():
+            break
+        last_good = idx
+    return last_good
+
+
+def _manifest_matches(manifest: Dict[str, Any], expected: Dict[str, Any]) -> bool:
+    for key, exp in expected.items():
+        if manifest.get(key) != exp:
+            return False
+    return True
+
+
+def _find_resumable_run(
+    *,
+    out_root: Path,
+    symbol: str,
+    yyyymmdd: str,
+    expected_config: Dict[str, Any],
+    day_end_ms: int,
+) -> Optional[Tuple[Path, str, List[Dict[str, Any]], Optional[int]]]:
+    base = out_root / "calibration" / "schedules" / symbol
+    if not base.exists():
+        return None
+    candidates = sorted([p for p in base.iterdir() if p.is_dir() and p.name.startswith(f"{yyyymmdd}_")])
+    for run_dir in reversed(candidates):
+        manifest_path = run_dir / "manifest.json"
+        schedule_path = run_dir / "poisson_schedule.json"
+        if not manifest_path.exists():
+            continue
+        manifest = _load_json(manifest_path)
+        if not _manifest_matches(manifest, expected_config):
+            continue
+        schedule: List[Dict[str, Any]] = []
+        if schedule_path.exists():
+            schedule = _load_json(schedule_path)
+        last_idx = _find_last_complete_index(schedule)
+        schedule = schedule[: last_idx + 1] if last_idx >= 0 else []
+        if schedule and int(schedule[-1].get("end_ms", 0)) >= int(day_end_ms):
+            continue
+        resume_from_ms = int(schedule[-1]["end_ms"]) if schedule else None
+        run_id = str(run_dir.name.split("_", 1)[1]) if "_" in run_dir.name else str(run_dir.name)
+        return run_dir, run_id, schedule, resume_from_ms
+    return None
+
+
+def _resolve_run_base(
+    *,
+    out_root: Path,
+    symbol: str,
+    yyyymmdd: str,
+    resume_enabled: bool,
+    run_id_override: Optional[str],
+    expected_config: Dict[str, Any],
+    day_end_ms: int,
+) -> Tuple[Path, str, List[Dict[str, Any]], Optional[int], bool]:
+    if resume_enabled and not run_id_override:
+        info = _find_resumable_run(
+            out_root=out_root,
+            symbol=symbol,
+            yyyymmdd=yyyymmdd,
+            expected_config=expected_config,
+            day_end_ms=day_end_ms,
+        )
+        if info is not None:
+            run_dir, run_id, schedule, resume_from_ms = info
+            return run_dir, run_id, schedule, resume_from_ms, True
+    run_id = run_id_override or _generate_run_id()
+    run_base = out_root / "calibration" / "schedules" / symbol / f"{yyyymmdd}_{run_id}"
+    return run_base, run_id, [], None, False
+
+
 def _calibrate_poisson_window(
     *,
     data_root: Path,
@@ -181,29 +278,39 @@ def build_schedule(
     fallback_policy: str,
     min_usable_deltas: int,
     calib_engine: str = "paper",
+    day_bounds_ms: Optional[Tuple[int, int]] = None,
+    existing_schedule: Optional[List[Dict[str, Any]]] = None,
+    resume_from_ms: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """Build a piecewise-constant Poisson schedule over the day.
 
     This is the core Mode-B artifact.
     """
-    day_start_ms, day_end_ms = _read_day_time_bounds_ms(data_root, symbol, yyyymmdd)
+    if day_bounds_ms is None:
+        day_start_ms, day_end_ms = _read_day_time_bounds_ms(data_root, symbol, yyyymmdd)
+    else:
+        day_start_ms, day_end_ms = day_bounds_ms
     train_ms = int(train_window_min * 60_000)
     step_ms = int(step_min * 60_000)
 
     # Start schedule after we have a full training window.
-    t = day_start_ms + train_ms
-    offset = (t - day_start_ms) % step_ms
-    if offset:
-        t += (step_ms - offset)
+    t0 = _initial_schedule_start_ms(day_start_ms, train_ms, step_ms)
+    t = int(resume_from_ms) if resume_from_ms is not None else int(t0)
+    if t < t0:
+        t = int(t0)
 
 
     # Progress tracking (Mode B schedule-only).
-    t0 = int(t)
     n_steps = int(((day_end_ms - t0) + step_ms - 1) // step_ms) if day_end_ms > t0 else 0
-    step_idx = 0
+    schedule: List[Dict[str, Any]] = list(existing_schedule) if existing_schedule else []
+    step_idx = len(schedule)
     t_wall0 = time.time()
-    schedule: List[Dict[str, Any]] = []
     last_good: Optional[Dict[str, Any]] = None
+    if schedule:
+        for seg in reversed(schedule):
+            if bool(seg.get("usable")):
+                last_good = seg
+                break
 
     while t < day_end_ms:
         seg_start = int(t)
@@ -385,6 +492,12 @@ def main() -> None:
         help="What to do when a segment cannot be calibrated.",
     )
     ap.add_argument("--min-usable-deltas", type=int, default=int(os.getenv("MIN_USABLE_DELTAS", "3")))
+    ap.add_argument(
+        "--resume",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Resume an interrupted run for the same day/symbol when possible.",
+    )
 
     args = ap.parse_args()
     if not args.yyyymmdd:
@@ -397,25 +510,9 @@ def main() -> None:
     data_root = Path(args.data_root)
     out_root = Path(args.out_root)
 
-    run_id = os.getenv("RUN_ID", datetime.utcnow().strftime("%Y%m%dT%H%M%SZ"))
+    run_id_override = os.getenv("RUN_ID")
     log_level = os.getenv("LOG_LEVEL", "INFO")
     log_root = os.getenv("LOG_ROOT", "out/logs")
-
-    log_path = setup_run_logging(
-        level=log_level,
-        run_type="calibrate_schedule",
-        symbol=args.symbol,
-        yyyymmdd=args.yyyymmdd,
-        run_id=run_id,
-        base_dir=log_root,
-    )
-    log.info(
-        "Calibration(schedule-only) start symbol=%s day=%s run_id=%s tick_size=%s",
-        args.symbol,
-        args.yyyymmdd,
-        run_id,
-        args.tick_size,
-    )
 
     # Log all relevant configuration in a single, greppable line.
     log.info(
@@ -447,7 +544,61 @@ def main() -> None:
         bool(str(args.calib_engine).strip().lower() == "virtual"),
     )
 
-    run_base = out_root / "calibration" / "schedules" / args.symbol / f"{args.yyyymmdd}_{run_id}"
+    day_bounds = _read_day_time_bounds_ms(data_root, args.symbol, args.yyyymmdd)
+    expected_config = {
+        "tick_size": float(args.tick_size),
+        "poisson_dt_ms": int(args.poisson_dt_ms),
+        "train_window_min": int(args.train_window_min),
+        "step_min": int(args.step_min),
+        "fit_method": str(args.fit_method),
+        "deltas": deltas,
+        "dwell_ms": int(args.dwell_ms),
+        "mid_move_threshold_ticks": (args.mid_move_threshold_ticks if args.mid_move_threshold_ticks > 0 else None),
+        "min_exposure_s": float(args.min_exposure_s),
+        "max_delta_ticks": int(args.max_delta_ticks),
+        "fallback_policy": str(args.fallback_policy),
+        "min_usable_deltas": int(args.min_usable_deltas),
+        "quote_qty": float(args.quote_qty),
+        "maker_fee_rate": float(args.maker_fee_rate),
+        "order_latency_ms": int(args.order_latency_ms),
+        "cancel_latency_ms": int(args.cancel_latency_ms),
+        "requote_interval_ms": int(args.requote_interval_ms),
+        "initial_cash": float(args.initial_cash),
+        "initial_inventory": float(args.initial_inventory),
+        "calib_engine": str(args.calib_engine),
+    }
+    run_base, run_id, existing_schedule, resume_from_ms, resumed = _resolve_run_base(
+        out_root=out_root,
+        symbol=args.symbol,
+        yyyymmdd=args.yyyymmdd,
+        resume_enabled=bool(args.resume),
+        run_id_override=run_id_override,
+        expected_config=expected_config,
+        day_end_ms=day_bounds[1],
+    )
+
+    log_path = setup_run_logging(
+        level=log_level,
+        run_type="calibrate_schedule",
+        symbol=args.symbol,
+        yyyymmdd=args.yyyymmdd,
+        run_id=run_id,
+        base_dir=log_root,
+    )
+    log.info(
+        "Calibration(schedule-only) start symbol=%s day=%s run_id=%s tick_size=%s",
+        args.symbol,
+        args.yyyymmdd,
+        run_id,
+        args.tick_size,
+    )
+    if resumed:
+        log.info(
+            "Resuming calibration: run_id=%s resume_from_ms=%s existing_windows=%d",
+            run_id,
+            str(resume_from_ms),
+            len(existing_schedule),
+        )
     calib_root = run_base / "calibration_windows"
     _ensure_dir(calib_root)
 
@@ -476,6 +627,9 @@ def main() -> None:
         fallback_policy=args.fallback_policy,
         min_usable_deltas=args.min_usable_deltas,
         calib_engine=args.calib_engine,
+        day_bounds_ms=day_bounds,
+        existing_schedule=existing_schedule,
+        resume_from_ms=resume_from_ms,
     )
 
     _ensure_dir(run_base)
@@ -504,6 +658,14 @@ def main() -> None:
         "max_delta_ticks": args.max_delta_ticks,
         "fallback_policy": args.fallback_policy,
         "min_usable_deltas": args.min_usable_deltas,
+        "quote_qty": args.quote_qty,
+        "maker_fee_rate": args.maker_fee_rate,
+        "order_latency_ms": args.order_latency_ms,
+        "cancel_latency_ms": args.cancel_latency_ms,
+        "requote_interval_ms": args.requote_interval_ms,
+        "initial_cash": args.initial_cash,
+        "initial_inventory": args.initial_inventory,
+        "calib_engine": args.calib_engine,
         "schedule_path": str(schedule_path),
         "window_metrics_csv": str(run_base / "window_metrics.csv"),
         "calibration_windows_root": str(calib_root),

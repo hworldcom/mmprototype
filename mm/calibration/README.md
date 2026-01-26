@@ -120,6 +120,17 @@ out/calibration/schedules/<SYMBOL>/<YYYYMMDD>_<RUN_ID>/
     train_<start_ms>_<end_ms>/...
 ```
 
+### Resume behavior (schedule-only)
+
+By default, the schedule-only runner will resume an interrupted run for the same
+`SYMBOL` + `DAY` when it finds a prior run with matching configuration. It will
+continue from the last completed window and reuse the existing output directory.
+
+To force a new run (skip resume), either:
+
+- pass `--no-resume`
+- set a fresh `RUN_ID` in the environment
+
 The included notebook `calibration_schedule_qa.ipynb` can be used to QA the schedule (coverage, parameter stability, implied fill rates)
 and optionally correlate it with market metrics from the trades stream.
 
@@ -304,4 +315,3 @@ Backtest integration:
 - Always calibrate on **past** data and apply to **future** data (walk-forward) to avoid look-ahead bias.
 - Exclude very small deltas (e.g., δ=0) if queue-position effects dominate.
 - Recalibrate periodically (e.g., hourly/daily) or by regime (volatility/trade-rate buckets).
-
