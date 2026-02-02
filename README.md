@@ -12,10 +12,11 @@ for snapshots; if you later need signed endpoints or user streams, you can reint
 |------|----------------|
 | `mm_recorder/recorder.py` | End-to-end orchestration: enforces the Berlin trading window, wires callbacks, persists CSV/NDJSON outputs, and emits telemetry/events. |
 | `mm_core/sync_engine.py` | Pure state machine that bridges REST snapshots with WebSocket depth diffs and detects any sequencing gap. |
+| `mm_core/checksum_engine.py` | Checksum-based sync engine for exchanges like Kraken (verifies CRC checksums instead of sequence ids). |
 | `mm_core/local_orderbook.py` | Lightweight in-memory book keyed by price, used by the recorder and sync engine. |
 | `mm_recorder/buffered_writer.py` | Buffered CSV writer that batches rows in memory to reduce fsync pressure. |
 | `mm_recorder/ws_stream.py` | Async websocket client with reconnect, ping/pong, and backoff. |
-| `mm_recorder/snapshot.py` | REST snapshot helper that serializes snapshots to disk for audit and resyncs. |
+| `mm_recorder/snapshot.py` | Snapshot helper that serializes CSV + raw JSON snapshots for audit and resyncs. |
 
 The repository includes tests that validate epochs, header handling, and recorder output contracts. Those tests run offline thanks to the client-creation guard in `recorder.py`.
 
@@ -71,6 +72,19 @@ Uncompressed outputs are intentionally not supported. Avoid renaming columns or 
 - **Order book diffs**: checksum-driven; `U/u` are `0` because Kraken doesn’t provide them. `checksum`, `exchange`, `symbol`, and `raw` are persisted in the diff NDJSON for replay verification.
 - **Trades**: `trade` channel parsed into the shared trade schema; raw payloads stored in `trades/trades_ws_raw_*.ndjson.gz`.
 - **Snapshots**: WS snapshot saved to CSV plus raw JSON (`snapshot_*.json`), with checksum stored in both the snapshot CSV and events ledger.
+
+Note: raw JSON payloads may contain Decimal values serialized as strings to preserve precision for checksum verification.
+
+## Replay notes
+
+To rebuild the order book for a day:
+
+1. Load the first snapshot CSV (or JSON) for the session.
+2. Apply each diff in `diffs/depth_diffs_*.ndjson.gz` in order of `recv_seq`.
+3. For Binance, validate sequential `U/u` ranges. For Kraken, validate the per-diff `checksum` after applying each update.
+4. If a gap is detected, jump to the next snapshot tagged in `events_*.csv.gz` (look for `resync_start`/`resync_done`).
+
+Replay should ignore diffs received before the initial snapshot is loaded. The `events_*.csv.gz` ledger provides the authoritative timeline (window boundaries, reconnects, resync tags).
 
 ## Tests
 
