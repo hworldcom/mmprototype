@@ -75,6 +75,13 @@ Uncompressed outputs are intentionally not supported. Avoid renaming columns or 
 
 Note: raw JSON payloads may contain Decimal values serialized as strings to preserve precision for checksum verification.
 
+## Recorder state machine
+
+The recorder tracks an explicit state machine and emits `state_change` events:
+
+`CONNECTING → SNAPSHOT → SYNCING → SYNCED`  
+Any gap or checksum mismatch transitions to `RESYNCING`, and on shutdown to `STOPPED`.
+
 ## Replay notes
 
 To rebuild the order book for a day:
@@ -126,6 +133,7 @@ If you vendor this repo into another build context, ensure `mm_core` is present 
 | `WS_RECONNECT_BACKOFF_S`, `WS_RECONNECT_BACKOFF_MAX_S` | Reconnect backoff base and cap (seconds). |
 | `WS_MAX_SESSION_S` | Max WS session duration before forced reconnect (seconds). |
 | `WS_OPEN_TIMEOUT_S` | WebSocket handshake/open timeout (seconds). |
+| `WS_NO_DATA_WARN_S` | Warn if no WS messages are received for this many seconds. |
 | `WINDOW_TZ` (env) | Timezone used for start/end windows (default: `Europe/Berlin`). |
 | `WINDOW_START_HHMM` (env) | Window start time in 24h `HH:MM` (default: `00:00`). |
 | `WINDOW_END_HHMM` (env) | Window end time in 24h `HH:MM` (default: `00:15`). |

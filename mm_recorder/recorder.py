@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+from enum import Enum
 
 """Market data recorder.
 
@@ -45,12 +46,21 @@ WS_RECONNECT_BACKOFF_S = float(os.getenv("WS_RECONNECT_BACKOFF_S", "1.0"))
 WS_RECONNECT_BACKOFF_MAX_S = float(os.getenv("WS_RECONNECT_BACKOFF_MAX_S", "30.0"))
 WS_MAX_SESSION_S = float(os.getenv("WS_MAX_SESSION_S", str(23 * 3600 + 50 * 60)))
 WS_OPEN_TIMEOUT_S = float(os.getenv("WS_OPEN_TIMEOUT_S", "10.0"))
+WS_NO_DATA_WARN_S = float(os.getenv("WS_NO_DATA_WARN_S", "10.0"))
 
 # TLS verification should remain enabled by default.
 INSECURE_TLS = os.getenv("INSECURE_TLS", "0").strip() in ("1", "true", "True")
 
 # If True, write raw WS depth diffs for production-faithful replay
 STORE_DEPTH_DIFFS = True
+
+class RecorderPhase(str, Enum):
+    CONNECTING = "connecting"
+    SNAPSHOT = "snapshot"
+    SYNCING = "syncing"
+    SYNCED = "synced"
+    RESYNCING = "resyncing"
+    STOPPED = "stopped"
 
 def window_now():
     """Current wall-clock time in the configured recording timezone.
@@ -82,6 +92,9 @@ class RecorderState:
     last_trade_event_ms: int | None = None
     needs_snapshot: bool = False
     pending_snapshot_tag: str | None = None
+    phase: RecorderPhase = RecorderPhase.CONNECTING
+    last_ws_msg_time: float | None = None
+    last_no_data_warn: float = 0.0
 
 
 def _parse_hhmm(value: str, label: str) -> tuple[int, int]:
@@ -368,6 +381,16 @@ def run_recorder():
         ev_f.flush()
         return eid
 
+    def set_phase(new_phase: RecorderPhase, reason: str | None = None) -> None:
+        if state.phase == new_phase:
+            return
+        prev = state.phase
+        state.phase = new_phase
+        details = {"from": prev.value, "to": new_phase.value}
+        if reason:
+            details["reason"] = reason
+        emit_event("state_change", details)
+
     def write_gap(event: str, details: str):
         ts_recv_ms = int(time.time() * 1000)
         ts_recv_seq = next_recv_seq()
@@ -390,6 +413,13 @@ def run_recorder():
             return
         state.last_hb = now_s
         uptime = now_s - proc_t0
+
+        if state.ws_open_count > 0 and state.last_ws_msg_time is not None:
+            idle_s = now_s - state.last_ws_msg_time
+            if idle_s >= WS_NO_DATA_WARN_S and (now_s - state.last_no_data_warn) >= WS_NO_DATA_WARN_S:
+                state.last_no_data_warn = now_s
+                emit_event("ws_no_data", {"idle_s": float(idle_s)})
+                log.warning("No WS data for %.1fs (phase=%s)", idle_s, state.phase.value)
 
         log.info(
             "HEARTBEAT uptime=%.0fs synced=%s snapshot=%s lastUpdateId=%s "
@@ -465,6 +495,7 @@ def run_recorder():
         state.epoch_id += 1
         tag = f"resync_{state.resync_count:06d}"
 
+        set_phase(RecorderPhase.RESYNCING, reason)
         log.warning("Resync triggered: %s", reason)
         write_gap("resync_start", reason)
         emit_event("resync_start", {"reason": reason, "tag": tag})
@@ -495,6 +526,7 @@ def run_recorder():
         emit_event("resync_done", {"tag": tag, "lastUpdateId": engine.lob.last_update_id})
 
     def handle_snapshot(snapshot: BookSnapshot, tag: str):
+        set_phase(RecorderPhase.SYNCING, "snapshot_loaded")
         details = {"tag": tag, "lastUpdateId": 0}
         if snapshot.checksum is not None:
             details["checksum"] = int(snapshot.checksum)
@@ -542,6 +574,7 @@ def run_recorder():
 
     def on_open():
         state.ws_open_count += 1
+        set_phase(RecorderPhase.SNAPSHOT, "ws_open")
 
         # First open: initial snapshot. Any subsequent open is treated as a reconnect and triggers a resync.
         if state.ws_open_count == 1:
@@ -580,6 +613,7 @@ def run_recorder():
 
         state.depth_msg_count += 1
         state.last_depth_event_ms = int(parsed.event_time_ms)
+        state.last_ws_msg_time = time.time()
 
         # Always store raw diffs for replay, even when not synced
         if diff_writer is not None:
@@ -631,6 +665,7 @@ def run_recorder():
                 return
 
             if result.action in ("synced", "applied") and engine.depth_synced:
+                set_phase(RecorderPhase.SYNCED, "depth_synced")
                 write_topn(event_time_ms=int(parsed.event_time_ms), recv_ms=recv_ms, recv_seq=msg_recv_seq)
 
             if result.action == "buffered":
@@ -647,6 +682,7 @@ def run_recorder():
 
         state.trade_msg_count += 1
         state.last_trade_event_ms = int(parsed.event_time_ms)
+        state.last_ws_msg_time = time.time()
 
         msg_recv_seq = next_recv_seq()
 
@@ -698,6 +734,7 @@ def run_recorder():
         handle_trade(parsed, recv_ms)
 
     def on_message(data: dict, recv_ms: int):
+        state.last_ws_msg_time = time.time()
         if isinstance(data, dict) and data.get("method") == "subscribe":
             emit_event(
                 "ws_subscribe_ack",
@@ -734,6 +771,8 @@ def run_recorder():
         # Keep the on-disk events ledger authoritative for operational debugging.
         emit_event(typ, details)
         log.info("WS status: %s %s", typ, details)
+        if typ == "ws_connecting":
+            set_phase(RecorderPhase.CONNECTING, "ws_connecting")
 
     # Backwards-compatible construction: tests may monkeypatch BinanceWSStream with a
     # simplified fake that does not accept newer parameters.
@@ -778,6 +817,7 @@ def run_recorder():
         except Exception:
             log.exception("Failed to emit run_stop event")
 
+        set_phase(RecorderPhase.STOPPED, "run_stop")
         # heartbeat can still run after this (it only logs)
         heartbeat(force=True)
 
