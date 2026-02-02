@@ -6,6 +6,7 @@ import os
 import random
 import ssl
 import time
+from decimal import Decimal
 from typing import Callable, Optional
 
 from websockets.asyncio.client import connect as ws_connect  # type: ignore
@@ -21,13 +22,16 @@ class BinanceWSStream:
         on_depth: Callable[[dict, int], None],
         on_trade: Callable[[dict, int], None],
         on_open: Optional[Callable[[], None]] = None,
+        on_message: Optional[Callable[[dict, int], None]] = None,
         on_status: Optional[Callable[[str, dict], None]] = None,
         insecure_tls: bool = False,
+        subscribe_messages: Optional[list] = None,
         ping_interval_s: int = 20,
         ping_timeout_s: int = 60,
         reconnect_backoff_s: float = 1.0,
         reconnect_backoff_max_s: float = 30.0,
         max_session_s: float = 23 * 3600 + 50 * 60,
+        open_timeout_s: float = 10.0,
         recv_poll_timeout_s: float = 5.0,
         max_queue: int = 256,
     ):
@@ -35,14 +39,17 @@ class BinanceWSStream:
         self.on_depth = on_depth
         self.on_trade = on_trade
         self.on_open_cb = on_open
+        self.on_message_cb = on_message
         self.on_status_cb = on_status
         self.insecure_tls = insecure_tls
+        self.subscribe_messages = subscribe_messages or []
 
         self.ping_interval_s = max(0, int(ping_interval_s))
         self.ping_timeout_s = max(1, int(ping_timeout_s))
         self.reconnect_backoff_s = max(0.0, float(reconnect_backoff_s))
         self.reconnect_backoff_max_s = max(self.reconnect_backoff_s, float(reconnect_backoff_max_s))
         self.max_session_s = max(60.0, float(max_session_s))
+        self.open_timeout_s = max(1.0, float(open_timeout_s))
         self.recv_poll_timeout_s = max(0.5, float(recv_poll_timeout_s))
         self.max_queue = max(1, int(max_queue))
 
@@ -62,7 +69,10 @@ class BinanceWSStream:
         if self.ping_interval_s <= 0 or self._ws is None:
             return
         while not self._stop:
-            await asyncio.sleep(self.ping_interval_s)
+            try:
+                await asyncio.sleep(self.ping_interval_s)
+            except asyncio.CancelledError:
+                return
             if self._stop or self._ws is None:
                 return
             try:
@@ -102,19 +112,26 @@ class BinanceWSStream:
 
             recv_ms = int(time.time() * 1000)
             try:
-                payload = json.loads(msg)
+                if self.on_message_cb is not None:
+                    payload = json.loads(msg, parse_float=Decimal)
+                else:
+                    payload = json.loads(msg)
             except Exception:
                 self._log.exception("Failed to parse WS message")
                 continue
 
-            stream = payload.get("stream", "")
-            data = payload.get("data", payload)
+            stream = payload.get("stream", "") if isinstance(payload, dict) else ""
+            data = payload.get("data", payload) if isinstance(payload, dict) else payload
 
             try:
-                if "@depth" in stream or data.get("e") == "depthUpdate":
-                    self.on_depth(data, recv_ms)
-                elif "@trade" in stream or data.get("e") == "trade":
-                    self.on_trade(data, recv_ms)
+                if self.on_message_cb is not None:
+                    # Custom handlers expect the full exchange payload.
+                    self.on_message_cb(payload, recv_ms)
+                else:
+                    if "@depth" in stream or data.get("e") == "depthUpdate":
+                        self.on_depth(data, recv_ms)
+                    elif "@trade" in stream or data.get("e") == "trade":
+                        self.on_trade(data, recv_ms)
             except Exception:
                 self._log.exception("Callback error (stream=%s)", stream)
 
@@ -136,11 +153,13 @@ class BinanceWSStream:
             session_deadline = time.monotonic() + self.max_session_s
             ssl_ctx = self._ssl_context()
             try:
+                self._emit_status("ws_connecting", {"attempt": attempt})
                 connect_kwargs = {
                     "ping_interval": None,
                     "ping_timeout": None,
                     "close_timeout": 5,
                     "max_queue": self.max_queue,
+                    "open_timeout": self.open_timeout_s,
                 }
                 if ssl_ctx is not None:
                     connect_kwargs["ssl"] = ssl_ctx
@@ -150,12 +169,23 @@ class BinanceWSStream:
                         self.on_open_cb()
                     self._emit_status("ws_connect", {"attempt": attempt})
 
+                    for msg in self.subscribe_messages:
+                        try:
+                            if isinstance(msg, str):
+                                await ws.send(msg)
+                            else:
+                                await ws.send(json.dumps(msg))
+                            self._emit_status("ws_subscribe", {"message": msg})
+                        except Exception as exc:
+                            self._emit_status("ws_subscribe_error", {"error": str(exc)})
+                            raise
+
                     ping_task = asyncio.create_task(self._ping_loop())
                     try:
                         await self._read_loop(session_deadline=session_deadline)
                     finally:
                         ping_task.cancel()
-                        with contextlib.suppress(Exception):
+                        with contextlib.suppress(asyncio.CancelledError, Exception):
                             await ping_task
                     close_code = getattr(ws, "close_code", None)
                     close_reason = getattr(ws, "close_reason", None)
@@ -197,6 +227,20 @@ class BinanceWSStream:
 
     def close(self) -> None:
         self._stop = True
+        ws = self._ws
+        if ws is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(ws.close())
+            return
+        except RuntimeError:
+            loop = self._loop
+        if loop and loop.is_running():
+            asyncio.run_coroutine_threadsafe(ws.close(), loop)
+
+    def disconnect(self) -> None:
+        """Close the active websocket but allow the reconnect loop to continue."""
         ws = self._ws
         if ws is None:
             return

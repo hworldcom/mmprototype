@@ -54,13 +54,13 @@ def test_epoch_id_increments_after_resync(monkeypatch, tmp_path):
         snapshots_dir.mkdir(parents=True, exist_ok=True)
         snap_path = snapshots_dir / f"snapshot_{event_id:06d}_{tag}.csv"
         snap_path.write_text("dummy\n", encoding="utf-8")
-        return DummyLob(last_update_id=10), snap_path, 10
+        return DummyLob(last_update_id=10), snap_path, 10, {}
 
     monkeypatch.setattr(recorder_mod, "record_rest_snapshot", fake_record_rest_snapshot)
 
     # Fake WS: sync -> applied -> gap -> resync -> sync again -> applied
     class FakeStream:
-        def __init__(self, ws_url, on_depth, on_trade, on_open, insecure_tls):
+        def __init__(self, ws_url, on_depth, on_trade, on_open, insecure_tls, **kwargs):
             self.on_open = on_open
             self.on_depth = on_depth
 

@@ -84,7 +84,7 @@ def test_recorder_emits_window_end_and_stops(tmp_path, monkeypatch):
 
     # Avoid requiring python-binance for REST snapshots in unit tests.
     def _dummy_record_rest_snapshot(**kwargs):
-        # Return: (lob, path, last_uid)
+        # Return: (lob, path, last_uid, raw_snapshot)
         from mm_core.local_orderbook import LocalOrderBook
 
         out = Path(kwargs["snapshots_dir"]) / "snapshot_dummy.csv.gz"
@@ -93,7 +93,7 @@ def test_recorder_emits_window_end_and_stops(tmp_path, monkeypatch):
 
         lob = LocalOrderBook()
         lob.last_update_id = 0
-        return lob, out, 0
+        return lob, out, 0, {}
 
     monkeypatch.setattr(rec, "record_rest_snapshot", _dummy_record_rest_snapshot)
 
@@ -101,7 +101,7 @@ def test_recorder_emits_window_end_and_stops(tmp_path, monkeypatch):
     rec.run_recorder()
 
     # Verify day folder and events
-    day_dir = tmp_path / "data" / "BTCUSDT" / "20260114"
+    day_dir = tmp_path / "data" / "binance" / "BTCUSDT" / "20260114"
     assert day_dir.exists()
 
     events_path = day_dir / "events_BTCUSDT_20260114.csv.gz"
@@ -168,7 +168,7 @@ def test_recorder_buffered_warns_without_unbound_error(tmp_path, monkeypatch):
 
         lob = LocalOrderBook()
         lob.last_update_id = 0
-        return lob, out, 0
+        return lob, out, 0, {}
 
     monkeypatch.setattr(rec, "record_rest_snapshot", _dummy_record_rest_snapshot)
 

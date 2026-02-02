@@ -38,7 +38,7 @@ def test_schema_json_written(monkeypatch, tmp_path):
         snapshots_dir.mkdir(parents=True, exist_ok=True)
         path = snapshots_dir / f"snapshot_{event_id:06d}_{tag}.csv"
         path.write_text("run_id,event_id,side,price,qty,lastUpdateId\n", encoding="utf-8")
-        return lob, path, 10
+        return lob, path, 10, {}
 
     monkeypatch.setattr(recorder_mod, "record_rest_snapshot", fake_record_rest_snapshot)
 
@@ -62,7 +62,7 @@ def test_schema_json_written(monkeypatch, tmp_path):
     recorder_mod.run_recorder()
 
     day_str = recorder_mod.compute_window(recorder_mod.window_now())[0].strftime("%Y%m%d")
-    schema_path = tmp_path / "data" / "BTCUSDT" / day_str / "schema.json"
+    schema_path = tmp_path / "data" / "binance" / "BTCUSDT" / day_str / "schema.json"
     assert schema_path.exists()
 
     obj = json.loads(schema_path.read_text(encoding="utf-8"))

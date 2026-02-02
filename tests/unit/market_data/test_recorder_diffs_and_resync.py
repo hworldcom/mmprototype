@@ -53,7 +53,7 @@ def test_recorder_writes_diffs_and_resync(monkeypatch, tmp_path):
         snapshots_dir.mkdir(parents=True, exist_ok=True)
         path = snapshots_dir / f"snapshot_{event_id:06d}_{tag}.csv"
         path.write_text("run_id,event_id,side,price,qty,lastUpdateId\n", encoding="utf-8")
-        return lob, path, last_uid
+        return lob, path, last_uid, {}
 
     monkeypatch.setattr(recorder_mod, "record_rest_snapshot", fake_record_rest_snapshot)
 
@@ -63,7 +63,7 @@ def test_recorder_writes_diffs_and_resync(monkeypatch, tmp_path):
     # 3) bridging event for resync snapshot => sync
     # 4) one more sequential event => applied
     class FakeStream:
-        def __init__(self, ws_url, on_depth, on_trade, on_open, insecure_tls):
+        def __init__(self, ws_url, on_depth, on_trade, on_open, insecure_tls, **kwargs):
             self.on_open = on_open
             self.on_depth = on_depth
             self.on_trade = on_trade
@@ -94,7 +94,7 @@ def test_recorder_writes_diffs_and_resync(monkeypatch, tmp_path):
 
     # --- Assert outputs exist ---
     day_str = recorder_mod.compute_window(recorder_mod.window_now())[0].strftime("%Y%m%d")
-    base_dir = tmp_path / "data" / "BTCUSDT" / day_str
+    base_dir = tmp_path / "data" / "binance" / "BTCUSDT" / day_str
 
     # Diffs file
     diffs = list((base_dir / "diffs").glob("depth_diffs_BTCUSDT_*.ndjson.gz"))

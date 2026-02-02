@@ -73,7 +73,7 @@ def test_global_recv_seq_is_unique_across_message_types(monkeypatch, tmp_path):
             "run_id,event_id,side,price,qty,lastUpdateId\n" "1,1,bid,100,1,10\n" "1,1,ask,101,1,10\n",
             encoding="utf-8",
         )
-        return DummyLob(last_update_id=10), snap_path, 10
+        return DummyLob(last_update_id=10), snap_path, 10, {}
 
     monkeypatch.setattr(recorder_mod, "record_rest_snapshot", fake_record_rest_snapshot)
 
@@ -113,7 +113,7 @@ def test_global_recv_seq_is_unique_across_message_types(monkeypatch, tmp_path):
     recorder_mod.run_recorder()
 
     day = recorder_mod.compute_window(recorder_mod.window_now())[0].strftime("%Y%m%d")
-    base = tmp_path / "data" / symbol / day
+    base = tmp_path / "data" / "binance" / symbol / day
     events_path = base / f"events_{symbol}_{day}.csv.gz"
     trades_path = base / f"trades_ws_{symbol}_{day}.csv.gz"
     diffs_path = base / "diffs" / f"depth_diffs_{symbol}_{day}.ndjson.gz"

@@ -19,9 +19,10 @@ Note: The project supports running unit tests in minimal environments where
 
 from mm_recorder.logging_config import setup_logging
 from mm_recorder.ws_stream import BinanceWSStream
-from mm_recorder.snapshot import record_rest_snapshot
+from mm_recorder.snapshot import record_rest_snapshot, write_snapshot_csv, write_snapshot_json
 from mm_recorder.buffered_writer import BufferedCSVWriter, BufferedTextWriter, _is_empty_text_file
-from mm_core.sync_engine import OrderBookSyncEngine
+from mm_recorder.exchanges import get_adapter
+from mm_recorder.exchanges.types import BookSnapshot, DepthDiff, Trade
 from mm_core.schema import write_schema, SCHEMA_VERSION
 
 ORIGINAL_RECORD_REST_SNAPSHOT = record_rest_snapshot
@@ -43,6 +44,7 @@ WS_PING_TIMEOUT_S = int(os.getenv("WS_PING_TIMEOUT_S", "60"))
 WS_RECONNECT_BACKOFF_S = float(os.getenv("WS_RECONNECT_BACKOFF_S", "1.0"))
 WS_RECONNECT_BACKOFF_MAX_S = float(os.getenv("WS_RECONNECT_BACKOFF_MAX_S", "30.0"))
 WS_MAX_SESSION_S = float(os.getenv("WS_MAX_SESSION_S", str(23 * 3600 + 50 * 60)))
+WS_OPEN_TIMEOUT_S = float(os.getenv("WS_OPEN_TIMEOUT_S", "10.0"))
 
 # TLS verification should remain enabled by default.
 INSECURE_TLS = os.getenv("INSECURE_TLS", "0").strip() in ("1", "true", "True")
@@ -78,6 +80,8 @@ class RecorderState:
     tr_rows_written: int = 0
     last_depth_event_ms: int | None = None
     last_trade_event_ms: int | None = None
+    needs_snapshot: bool = False
+    pending_snapshot_tag: str | None = None
 
 
 def _parse_hhmm(value: str, label: str) -> tuple[int, int]:
@@ -110,7 +114,10 @@ def compute_window(now: datetime) -> tuple[datetime, datetime]:
 
 
 def run_recorder():
-    symbol = os.getenv("SYMBOL", "").upper().strip()
+    exchange = os.getenv("EXCHANGE", "binance").strip().lower()
+    adapter = get_adapter(exchange)
+    symbol = adapter.normalize_symbol(os.getenv("SYMBOL", "").strip())
+    symbol_fs = symbol.replace("/", "").replace("-", "").replace(":", "").replace(" ", "")
     if not symbol:
         raise RuntimeError("SYMBOL environment variable is required (e.g. SYMBOL=BTCUSDT).")
 
@@ -125,21 +132,26 @@ def run_recorder():
 
     # Per-day folder (window start date)
     day_str = window_start.strftime("%Y%m%d")
-    symbol_dir = Path("data") / symbol
+    symbol_dir = Path("data") / exchange / symbol_fs
     day_dir = symbol_dir / day_str
     day_dir.mkdir(parents=True, exist_ok=True)
 
     snapshots_dir = day_dir / "snapshots"
     diffs_dir = day_dir / "diffs"
+    trades_dir = day_dir / "trades"
     if STORE_DEPTH_DIFFS:
         diffs_dir.mkdir(parents=True, exist_ok=True)
+    trades_dir.mkdir(parents=True, exist_ok=True)
 
-    log_path = setup_logging("INFO", component="recorder", subdir=symbol)
+    log_subdir = f"{exchange}/{symbol_fs}"
+    log_path = setup_logging("INFO", component="recorder", subdir=log_subdir)
     log = logging.getLogger("market_data.recorder")
     log.info("Recorder logging to %s", log_path)
     log.info(
-        "Recorder config symbol=%s window=%s–%s tz=%s depth_levels=%s store_depth_diffs=%s",
+        "Recorder config exchange=%s symbol=%s symbol_fs=%s window=%s–%s tz=%s depth_levels=%s store_depth_diffs=%s",
+        exchange,
         symbol,
+        symbol_fs,
         window_start.isoformat(),
         window_end.isoformat(),
         os.getenv("WINDOW_TZ", "Europe/Berlin"),
@@ -154,6 +166,7 @@ def run_recorder():
         WS_RECONNECT_BACKOFF_MAX_S,
         WS_MAX_SESSION_S,
     )
+    log.info("WS connect timeout open_timeout_s=%.1f", WS_OPEN_TIMEOUT_S)
 
     # Recording window in configured timezone.
     start = window_start
@@ -182,10 +195,10 @@ def run_recorder():
         return state.event_id
 
     # Outputs
-    ob_path = day_dir / f"orderbook_ws_depth_{symbol}_{day_str}.csv.gz"
-    tr_path = day_dir / f"trades_ws_{symbol}_{day_str}.csv.gz"
-    gap_path = day_dir / f"gaps_{symbol}_{day_str}.csv.gz"
-    ev_path = day_dir / f"events_{symbol}_{day_str}.csv.gz"
+    ob_path = day_dir / f"orderbook_ws_depth_{symbol_fs}_{day_str}.csv.gz"
+    tr_path = day_dir / f"trades_ws_{symbol_fs}_{day_str}.csv.gz"
+    gap_path = day_dir / f"gaps_{symbol_fs}_{day_str}.csv.gz"
+    ev_path = day_dir / f"events_{symbol_fs}_{day_str}.csv.gz"
 
     def open_csv_append(path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -226,7 +239,7 @@ def run_recorder():
     # This file is overwritten on each recorder start to reflect current schema.
     schema_path = day_dir / "schema.json"
     files_schema = {
-        "orderbook_ws_depth_csv": {
+            "orderbook_ws_depth_csv": {
             "path": str(ob_path.name),
             "format": "csv",
             "compression": "gzip",
@@ -250,12 +263,26 @@ def run_recorder():
             "compression": "gzip",
             "columns": ["event_id", "recv_time_ms", "recv_seq", "run_id", "type", "epoch_id", "details_json"],
         },
+        "snapshots_raw_json": {
+            "path": "snapshots/snapshot_<event_id>_<tag>.json",
+            "format": "json",
+            "notes": "Raw exchange snapshot payload (REST for Binance, WS for checksum exchanges).",
+        },
+        "trades_ws_raw_ndjson_gz": {
+            "path": f"trades/trades_ws_raw_{symbol_fs}_{day_str}.ndjson.gz",
+            "format": "ndjson.gz",
+            "fields": ["recv_ms", "recv_seq", "event_time_ms", "trade_id", "exchange", "symbol", "raw"],
+        },
     }
     if STORE_DEPTH_DIFFS:
+        diff_fields = ["recv_ms", "recv_seq", "E", "U", "u", "b", "a"]
+        if adapter.sync_mode == "checksum":
+            diff_fields.append("checksum")
+        diff_fields.extend(["exchange", "symbol", "raw"])
         files_schema["depth_diffs_ndjson_gz"] = {
-            "path": f"diffs/depth_diffs_{symbol}_{day_str}.ndjson.gz",
+            "path": f"diffs/depth_diffs_{symbol_fs}_{day_str}.ndjson.gz",
             "format": "ndjson.gz",
-            "fields": ["recv_ms", "recv_seq", "E", "U", "u", "b", "a"],
+            "fields": diff_fields,
         }
     write_schema(schema_path, files_schema)
 
@@ -290,7 +317,7 @@ def run_recorder():
         ev_f.flush()
     diff_writer: BufferedTextWriter | None = None
     if STORE_DEPTH_DIFFS:
-        diff_path = diffs_dir / f"depth_diffs_{symbol}_{day_str}.ndjson.gz"
+        diff_path = diffs_dir / f"depth_diffs_{symbol_fs}_{day_str}.ndjson.gz"
         # Buffer gzip writes to avoid per-message flush costs.
         diff_writer = BufferedTextWriter(
             diff_path,
@@ -298,6 +325,12 @@ def run_recorder():
             flush_interval_s=BUFFER_FLUSH_INTERVAL_SEC,
             opener=lambda p: gzip.open(p, "at", encoding="utf-8"),
         )
+    tr_raw_writer = BufferedTextWriter(
+        trades_dir / f"trades_ws_raw_{symbol_fs}_{day_str}.ndjson.gz",
+        flush_lines=5000,
+        flush_interval_s=BUFFER_FLUSH_INTERVAL_SEC,
+        opener=lambda p: gzip.open(p, "at", encoding="utf-8"),
+    )
 
     log.info("Day dir:         %s", day_dir)
     log.info("Orderbook out:   %s", ob_path)
@@ -307,7 +340,8 @@ def run_recorder():
     if STORE_DEPTH_DIFFS:
         log.info("Diffs out:       %s", diff_path)
 
-    engine = OrderBookSyncEngine()
+    sub_depth = adapter.normalize_depth(DEPTH_LEVELS)
+    engine = adapter.create_sync_engine(sub_depth)
 
     state = RecorderState(
         event_id=int(time.time() * 1000),
@@ -400,7 +434,7 @@ def run_recorder():
         client = None
 
         eid = emit_event("snapshot_request", {"tag": tag, "limit": SNAPSHOT_LIMIT})
-        lob, path, last_uid = record_rest_snapshot(
+        lob, path, last_uid, raw_snapshot = record_rest_snapshot(
             client=client,
             symbol=symbol,
             day_dir=day_dir,
@@ -411,12 +445,17 @@ def run_recorder():
             tag=tag,
             decimals=DECIMALS,
         )
+        raw_path = snapshots_dir / f"snapshot_{eid:06d}_{tag}.json"
+        write_snapshot_json(path=raw_path, payload=raw_snapshot)
 
         engine.adopt_snapshot(lob)
         state.sync_t0 = time.time()
         state.last_sync_warn = time.time()
 
-        emit_event("snapshot_loaded", {"tag": tag, "lastUpdateId": last_uid, "path": str(path)})
+        emit_event(
+            "snapshot_loaded",
+            {"tag": tag, "lastUpdateId": last_uid, "path": str(path), "raw_path": str(raw_path)},
+        )
         log.info("Snapshot %s loaded lastUpdateId=%s (%s)", tag, last_uid, path)
 
     def resync(reason: str):
@@ -430,6 +469,17 @@ def run_recorder():
 
         engine.reset_for_resync()
 
+        if adapter.sync_mode == "checksum":
+            state.needs_snapshot = True
+            state.pending_snapshot_tag = tag
+            try:
+                reconnect = getattr(stream, "disconnect", None) or getattr(stream, "close", None)
+                if reconnect is not None:
+                    reconnect()
+            except Exception:
+                log.exception("Failed to close stream for checksum resync")
+            return
+
         try:
             fetch_snapshot(tag)
         except Exception as e:
@@ -441,6 +491,33 @@ def run_recorder():
 
         write_gap("resync_done", f"tag={tag} lastUpdateId={engine.lob.last_update_id}")
         emit_event("resync_done", {"tag": tag, "lastUpdateId": engine.lob.last_update_id})
+
+    def handle_snapshot(snapshot: BookSnapshot, tag: str):
+        details = {"tag": tag, "lastUpdateId": 0}
+        if snapshot.checksum is not None:
+            details["checksum"] = int(snapshot.checksum)
+        eid = emit_event("snapshot_loaded", details)
+        path = snapshots_dir / f"snapshot_{eid:06d}_{tag}.csv"
+        raw_path = snapshots_dir / f"snapshot_{eid:06d}_{tag}.json"
+        write_snapshot_csv(
+            path=path,
+            run_id=run_id,
+            event_id=eid,
+            bids=snapshot.bids,
+            asks=snapshot.asks,
+            last_update_id=0,
+            checksum=(int(snapshot.checksum) if snapshot.checksum is not None else None),
+            decimals=DECIMALS,
+        )
+        if snapshot.raw is not None:
+            write_snapshot_json(path=raw_path, payload=snapshot.raw)
+            emit_event("snapshot_raw_saved", {"path": str(raw_path), "tag": tag})
+        engine.adopt_snapshot(snapshot)
+        state.sync_t0 = time.time()
+        state.last_sync_warn = time.time()
+        if tag != "initial":
+            write_gap("resync_done", f"tag={tag} lastUpdateId=0")
+            emit_event("resync_done", {"tag": tag, "lastUpdateId": 0})
 
     def write_topn(event_time_ms: int, recv_ms: int, recv_seq: int):
         bids, asks = engine.lob.top_n(DEPTH_LEVELS)
@@ -476,23 +553,31 @@ def run_recorder():
                     "insecure_tls": INSECURE_TLS,
                 },
             )
-            try:
-                fetch_snapshot("initial")
-            except Exception as e:
-                log.exception("Failed initial snapshot; closing WS")
-                write_gap("fatal", f"initial_snapshot_failed: {e}")
-                emit_event("fatal", {"reason": "initial_snapshot_failed", "error": str(e)})
-                stream.close()
+            if adapter.sync_mode == "checksum":
+                state.needs_snapshot = True
+                state.pending_snapshot_tag = "initial"
+            else:
+                try:
+                    fetch_snapshot("initial")
+                except Exception as e:
+                    log.exception("Failed initial snapshot; closing WS")
+                    write_gap("fatal", f"initial_snapshot_failed: {e}")
+                    emit_event("fatal", {"reason": "initial_snapshot_failed", "error": str(e)})
+                    stream.close()
         else:
             emit_event("ws_reconnect_open", {"ws_url": ws_url, "open_count": state.ws_open_count})
             # Any reconnect implies potential missed diffs; always resync.
-            resync("ws_reconnect")
+            if adapter.sync_mode == "checksum":
+                if not state.needs_snapshot:
+                    resync("ws_reconnect")
+            else:
+                resync("ws_reconnect")
 
-    def on_depth(data, recv_ms: int):
+    def handle_depth(parsed: DepthDiff, recv_ms: int):
         msg_recv_seq = next_recv_seq()
 
         state.depth_msg_count += 1
-        state.last_depth_event_ms = int(data.get("E", 0))
+        state.last_depth_event_ms = int(parsed.event_time_ms)
 
         # Always store raw diffs for replay, even when not synced
         if diff_writer is not None:
@@ -500,13 +585,19 @@ def run_recorder():
                 minimal = {
                     "recv_ms": recv_ms,
                     "recv_seq": msg_recv_seq,
-                    "E": int(data.get("E", 0)),
-                    "U": int(data.get("U", 0)),
-                    "u": int(data.get("u", 0)),
-                    "b": data.get("b", []),
-                    "a": data.get("a", []),
+                    "E": int(parsed.event_time_ms),
+                    "U": int(parsed.U),
+                    "u": int(parsed.u),
+                    "b": parsed.bids,
+                    "a": parsed.asks,
                 }
-                diff_writer.write_line(json.dumps(minimal, ensure_ascii=False) + "\n")
+                if parsed.checksum is not None:
+                    minimal["checksum"] = int(parsed.checksum)
+                minimal["exchange"] = exchange
+                minimal["symbol"] = symbol
+                if parsed.raw is not None:
+                    minimal["raw"] = parsed.raw
+                diff_writer.write_line(json.dumps(minimal, ensure_ascii=False, default=str) + "\n")
             except Exception:
                 log.exception("Failed writing depth diffs")
 
@@ -525,7 +616,12 @@ def run_recorder():
             return
 
         try:
-            result = engine.feed_depth_event(data)
+            if adapter.sync_mode == "checksum":
+                result = engine.feed_depth_event(parsed)
+            else:
+                result = engine.feed_depth_event(
+                    {"E": parsed.event_time_ms, "U": parsed.U, "u": parsed.u, "b": parsed.bids, "a": parsed.asks}
+                )
 
             if result.action == "gap":
                 resync(result.details)
@@ -533,7 +629,7 @@ def run_recorder():
                 return
 
             if result.action in ("synced", "applied") and engine.depth_synced:
-                write_topn(event_time_ms=int(data.get("E", 0)), recv_ms=recv_ms, recv_seq=msg_recv_seq)
+                write_topn(event_time_ms=int(parsed.event_time_ms), recv_ms=recv_ms, recv_seq=msg_recv_seq)
 
             if result.action == "buffered":
                 warn_not_synced()
@@ -545,37 +641,97 @@ def run_recorder():
         finally:
             heartbeat()
 
-    def on_trade(data: dict, recv_ms: int):
+    def handle_trade(parsed: Trade, recv_ms: int):
+
         state.trade_msg_count += 1
-        state.last_trade_event_ms = int(data.get("E", 0))
+        state.last_trade_event_ms = int(parsed.event_time_ms)
 
         msg_recv_seq = next_recv_seq()
 
         try:
             tr_writer.write_row(
                 [
-                    int(data.get("E", 0)),
+                    int(parsed.event_time_ms),
                     recv_ms,
                     msg_recv_seq,
                     run_id,
-                    int(data.get("t", 0)),
-                    int(data.get("T", 0)),
-                    f'{float(data["p"]):.{DECIMALS}f}',
-                    f'{float(data["q"]):.{DECIMALS}f}',
-                    int(data["m"]),
+                    int(parsed.trade_id),
+                    int(parsed.trade_time_ms),
+                    f"{float(parsed.price):.{DECIMALS}f}",
+                    f"{float(parsed.qty):.{DECIMALS}f}",
+                    int(parsed.is_buyer_maker),
                 ]
             )
             state.tr_rows_written += 1
+            if parsed.raw is not None:
+                raw_payload = {
+                    "recv_ms": recv_ms,
+                    "recv_seq": msg_recv_seq,
+                    "event_time_ms": int(parsed.event_time_ms),
+                    "trade_id": int(parsed.trade_id),
+                    "exchange": exchange,
+                    "symbol": symbol,
+                    "raw": parsed.raw,
+                }
+                tr_raw_writer.write_line(json.dumps(raw_payload, ensure_ascii=False, default=str) + "\n")
         except Exception:
             log.exception("Unhandled exception in on_trade (message=%s)", data)
         finally:
             heartbeat()
 
-    ws_url = f"wss://stream.binance.com:9443/stream?streams={symbol.lower()}@depth@100ms/{symbol.lower()}@trade"
+    def on_depth(data, recv_ms: int):
+        try:
+            parsed = adapter.parse_depth(data)
+        except Exception:
+            log.exception("Failed to parse depth message")
+            return
+        handle_depth(parsed, recv_ms)
+
+    def on_trade(data: dict, recv_ms: int):
+        try:
+            parsed = adapter.parse_trade(data)
+        except Exception:
+            log.exception("Failed to parse trade message")
+            return
+        handle_trade(parsed, recv_ms)
+
+    def on_message(data: dict, recv_ms: int):
+        if isinstance(data, dict) and data.get("method") == "subscribe":
+            emit_event(
+                "ws_subscribe_ack",
+                {
+                    "success": data.get("success"),
+                    "result": data.get("result"),
+                    "error": data.get("error"),
+                },
+            )
+            if data.get("error"):
+                log.warning("WS subscribe error: %s", data.get("error"))
+        elif isinstance(data, dict) and data.get("error"):
+            emit_event("ws_error_payload", {"error": data.get("error")})
+            log.warning("WS error payload: %s", data.get("error"))
+        try:
+            snapshots, diffs, trades = adapter.parse_ws_message(data)
+        except Exception:
+            log.exception("Failed to parse WS message")
+            return
+        for snap in snapshots:
+            if state.needs_snapshot:
+                tag = state.pending_snapshot_tag or "snapshot"
+                handle_snapshot(snap, tag)
+                state.needs_snapshot = False
+                state.pending_snapshot_tag = None
+        for diff in diffs:
+            handle_depth(diff, recv_ms)
+        for tr in trades:
+            handle_trade(tr, recv_ms)
+
+    ws_url = adapter.ws_url(symbol)
 
     def on_status(typ: str, details: dict):
         # Keep the on-disk events ledger authoritative for operational debugging.
         emit_event(typ, details)
+        log.info("WS status: %s %s", typ, details)
 
     # Backwards-compatible construction: tests may monkeypatch BinanceWSStream with a
     # simplified fake that does not accept newer parameters.
@@ -586,12 +742,15 @@ def run_recorder():
             on_trade=on_trade,
             on_open=on_open,
             on_status=on_status,
+            on_message=(on_message if adapter.uses_custom_ws_messages else None),
             insecure_tls=INSECURE_TLS,
             ping_interval_s=WS_PING_INTERVAL_S,
             ping_timeout_s=WS_PING_TIMEOUT_S,
             reconnect_backoff_s=WS_RECONNECT_BACKOFF_S,
             reconnect_backoff_max_s=WS_RECONNECT_BACKOFF_MAX_S,
             max_session_s=WS_MAX_SESSION_S,
+            open_timeout_s=WS_OPEN_TIMEOUT_S,
+            subscribe_messages=adapter.subscribe_messages(symbol, sub_depth),
         )
     except TypeError:
         stream = BinanceWSStream(
@@ -602,7 +761,7 @@ def run_recorder():
             insecure_tls=INSECURE_TLS,
         )
 
-    emit_event("run_start", {"symbol": symbol, "day": day_str})
+        emit_event("run_start", {"symbol": symbol, "symbol_fs": symbol_fs, "day": day_str})
     log.info("Connecting WS: %s", ws_url)
 
     try:
@@ -631,6 +790,11 @@ def run_recorder():
                 writer.close()
             except Exception:
                 pass
+
+        try:
+            tr_raw_writer.close()
+        except Exception:
+            pass
 
         if diff_writer is not None:
             try:

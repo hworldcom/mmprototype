@@ -45,13 +45,13 @@ def test_appends_and_run_id_changes(monkeypatch, tmp_path):
         snapshots_dir.mkdir(parents=True, exist_ok=True)
         snap_path = snapshots_dir / f"snapshot_{event_id:06d}_{tag}.csv"
         snap_path.write_text("dummy\n", encoding="utf-8")
-        return DummyLob(last_update_id=10), snap_path, 10
+        return DummyLob(last_update_id=10), snap_path, 10, {}
 
     monkeypatch.setattr(recorder_mod, "record_rest_snapshot", fake_record_rest_snapshot)
 
     # Fake WS stream: open, then emit 2 depth events
     class FakeStream:
-        def __init__(self, ws_url, on_depth, on_trade, on_open, insecure_tls):
+        def __init__(self, ws_url, on_depth, on_trade, on_open, insecure_tls, **kwargs):
             self.on_depth = on_depth
             self.on_open = on_open
 
@@ -76,7 +76,7 @@ def test_appends_and_run_id_changes(monkeypatch, tmp_path):
     recorder_mod.run_recorder()
 
     day = recorder_mod.compute_window(recorder_mod.window_now())[0].strftime("%Y%m%d")
-    ob_path = tmp_path / "data" / symbol / day / f"orderbook_ws_depth_{symbol}_{day}.csv.gz"
+    ob_path = tmp_path / "data" / "binance" / symbol / day / f"orderbook_ws_depth_{symbol}_{day}.csv.gz"
 
     with gzip.open(ob_path, 'rt', encoding='utf-8', newline='') as f:
         rows = list(csv.reader(f))

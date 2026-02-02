@@ -1,6 +1,7 @@
 # tests/_paths.py
 
 from pathlib import Path
+import os
 
 
 def day_str(recorder_mod) -> str:
@@ -14,29 +15,45 @@ def day_str(recorder_mod) -> str:
     return window_start.strftime("%Y%m%d")
 
 
+def _exchange(recorder_mod) -> str:
+    return os.getenv("EXCHANGE", "binance").strip().lower() or "binance"
+
+
+def _symbol_fs(recorder_mod, symbol: str) -> str:
+    adapter = recorder_mod.get_adapter(_exchange(recorder_mod))
+    normalized = adapter.normalize_symbol(symbol)
+    return normalized.replace("/", "").replace("-", "").replace(":", "").replace(" ", "")
+
+
 def day_dir(tmp_path: Path, recorder_mod, symbol: str) -> Path:
-    return tmp_path / "data" / symbol / day_str(recorder_mod)
+    exchange = _exchange(recorder_mod)
+    symbol_fs = _symbol_fs(recorder_mod, symbol)
+    return tmp_path / "data" / exchange / symbol_fs / day_str(recorder_mod)
 
 
 def orderbook_path(tmp_path: Path, recorder_mod, symbol: str) -> Path:
     d = day_dir(tmp_path, recorder_mod, symbol)
     day = day_str(recorder_mod)
-    return d / f"orderbook_ws_depth_{symbol}_{day}.csv.gz"
+    symbol_fs = _symbol_fs(recorder_mod, symbol)
+    return d / f"orderbook_ws_depth_{symbol_fs}_{day}.csv.gz"
 
 
 def trades_path(tmp_path: Path, recorder_mod, symbol: str) -> Path:
     d = day_dir(tmp_path, recorder_mod, symbol)
     day = day_str(recorder_mod)
-    return d / f"trades_ws_{symbol}_{day}.csv.gz"
+    symbol_fs = _symbol_fs(recorder_mod, symbol)
+    return d / f"trades_ws_{symbol_fs}_{day}.csv.gz"
 
 
 def gaps_path(tmp_path: Path, recorder_mod, symbol: str) -> Path:
     d = day_dir(tmp_path, recorder_mod, symbol)
     day = day_str(recorder_mod)
-    return d / f"gaps_{symbol}_{day}.csv.gz"
+    symbol_fs = _symbol_fs(recorder_mod, symbol)
+    return d / f"gaps_{symbol_fs}_{day}.csv.gz"
 
 
 def events_path(tmp_path: Path, recorder_mod, symbol: str) -> Path:
     d = day_dir(tmp_path, recorder_mod, symbol)
     day = day_str(recorder_mod)
-    return d / f"events_{symbol}_{day}.csv.gz"
+    symbol_fs = _symbol_fs(recorder_mod, symbol)
+    return d / f"events_{symbol_fs}_{day}.csv.gz"

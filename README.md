@@ -21,14 +21,16 @@ The repository includes tests that validate epochs, header handling, and recorde
 
 ## Output contract
 
-Each recorder run (one symbol per process) produces the following files under `data/<SYMBOL>/<YYYYMMDD>/`:
+Each recorder run (one symbol per process) produces the following files under `data/<EXCHANGE>/<SYMBOL_FS>/<YYYYMMDD>/`:
 
-- `orderbook_ws_depth_<SYMBOL>_<YYYYMMDD>.csv.gz` — top-N book frames whenever the local book is synced.
-- `trades_ws_<SYMBOL>_<YYYYMMDD>.csv.gz` — individual trade prints with event/receive timestamps and trade identifiers.
-- `events_<SYMBOL>_<YYYYMMDD>.csv.gz` — authoritative ledger covering WS lifecycle, snapshot tags, resync epochs, and run boundaries.
-- `gaps_<SYMBOL>_<YYYYMMDD>.csv.gz` — optional audit of detected sequencing issues.
+- `orderbook_ws_depth_<SYMBOL_FS>_<YYYYMMDD>.csv.gz` — top-N book frames whenever the local book is synced.
+- `trades_ws_<SYMBOL_FS>_<YYYYMMDD>.csv.gz` — individual trade prints with event/receive timestamps and trade identifiers.
+- `events_<SYMBOL_FS>_<YYYYMMDD>.csv.gz` — authoritative ledger covering WS lifecycle, snapshot tags, resync epochs, and run boundaries.
+- `gaps_<SYMBOL_FS>_<YYYYMMDD>.csv.gz` — optional audit of detected sequencing issues.
 - `snapshots/snapshot_<event_id>_<tag>.csv` — REST snapshots referenced by the events ledger.
-- `diffs/depth_diffs_<SYMBOL>_<YYYYMMDD>.ndjson.gz` — optional compressed raw WS diffs for exact replays.
+- `snapshots/snapshot_<event_id>_<tag>.json` — raw snapshot payload (REST for Binance, WS for checksum exchanges).
+- `diffs/depth_diffs_<SYMBOL_FS>_<YYYYMMDD>.ndjson.gz` — optional compressed raw WS diffs for exact replays (checksum exchanges include a `checksum` field per diff).
+- `trades/trades_ws_raw_<SYMBOL_FS>_<YYYYMMDD>.ndjson.gz` — raw trade payloads with recv sequence metadata.
 
 Uncompressed outputs are intentionally not supported. Avoid renaming columns or folders unless you also update downstream consumers.
 
@@ -42,6 +44,10 @@ Uncompressed outputs are intentionally not supported. Avoid renaming columns or 
    ```bash
    export SYMBOL=ETHUSDT
    ```
+   Optional exchange (defaults to Binance):
+   ```bash
+   export EXCHANGE=binance  # or kraken
+   ```
 3. Launch the recorder:
    ```bash
    python -m mm_recorder.recorder
@@ -49,9 +55,22 @@ Uncompressed outputs are intentionally not supported. Avoid renaming columns or 
 
 ### Local run notes
 
-- Logs are written to `logs/recorder/<SYMBOL>/<YYYY-MM-DD>.log`.
+- Logs are written to `logs/recorder/<EXCHANGE>/<SYMBOL_FS>/<YYYY-MM-DD>.log` where `SYMBOL_FS` strips `/ - :` and spaces.
 - If your local TLS inspection blocks the websocket handshake, set `INSECURE_TLS=1`
   (only for local debugging).
+- Kraken adapter uses WebSocket v2 `book` channel with checksum-based sync and subscribes to `trade` for fills.
+
+## Exchange data formats
+
+### Binance (spot)
+- **Order book diffs**: `diffs/depth_diffs_*.ndjson.gz` uses Binance `depthUpdate` fields (`E`, `U`, `u`, `b`, `a`) and includes `raw` for the full payload.
+- **Trades**: `trades_ws_*.csv.gz` captures standard Binance trade fields; raw payloads are stored in `trades/trades_ws_raw_*.ndjson.gz`.
+- **Snapshots**: REST snapshot saved to CSV plus raw JSON (`snapshot_*.json`).
+
+### Kraken (spot, WS v2)
+- **Order book diffs**: checksum-driven; `U/u` are `0` because Kraken doesn’t provide them. `checksum`, `exchange`, `symbol`, and `raw` are persisted in the diff NDJSON for replay verification.
+- **Trades**: `trade` channel parsed into the shared trade schema; raw payloads stored in `trades/trades_ws_raw_*.ndjson.gz`.
+- **Snapshots**: WS snapshot saved to CSV plus raw JSON (`snapshot_*.json`), with checksum stored in both the snapshot CSV and events ledger.
 
 ## Tests
 
@@ -75,12 +94,14 @@ If you vendor this repo into another build context, ensure `mm_core` is present 
 
 | Variable/Const | Meaning |
 |----------------|---------|
+| `EXCHANGE` (env) | Exchange adapter to use (default: `binance`). Supported: `binance`, `kraken`. |
 | `SYMBOL` (env) | Trading pair to subscribe (e.g., `BTCUSDT`). Required. |
 | `DEPTH_LEVELS` | Number of L2 levels persisted per book snapshot row. |
 | `STORE_DEPTH_DIFFS` | Toggle gzip’d NDJSON logging of raw WS depth diffs for replay. |
 | `WS_PING_INTERVAL_S`, `WS_PING_TIMEOUT_S` | Client ping cadence and pong timeout (seconds). |
 | `WS_RECONNECT_BACKOFF_S`, `WS_RECONNECT_BACKOFF_MAX_S` | Reconnect backoff base and cap (seconds). |
 | `WS_MAX_SESSION_S` | Max WS session duration before forced reconnect (seconds). |
+| `WS_OPEN_TIMEOUT_S` | WebSocket handshake/open timeout (seconds). |
 | `WINDOW_TZ` (env) | Timezone used for start/end windows (default: `Europe/Berlin`). |
 | `WINDOW_START_HHMM` (env) | Window start time in 24h `HH:MM` (default: `00:00`). |
 | `WINDOW_END_HHMM` (env) | Window end time in 24h `HH:MM` (default: `00:15`). |

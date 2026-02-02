@@ -43,14 +43,14 @@ def test_no_orderbook_rows_until_synced(monkeypatch, tmp_path):
         snapshots_dir.mkdir(parents=True, exist_ok=True)
         snap_path = snapshots_dir / f"snapshot_{event_id:06d}_{tag}.csv"
         snap_path.write_text("dummy\n", encoding="utf-8")
-        return DummyLob(last_update_id=10), snap_path, 10
+        return DummyLob(last_update_id=10), snap_path, 10, {}
 
     monkeypatch.setattr(recorder_mod, "record_rest_snapshot", fake_record_rest_snapshot)
 
     # WS emits depth updates that NEVER satisfy bridge condition for lu=10:
     # bridge requires U <= 11 <= u; we'll send U=50,u=51 always.
     class FakeStream:
-        def __init__(self, ws_url, on_depth, on_trade, on_open, insecure_tls):
+        def __init__(self, ws_url, on_depth, on_trade, on_open, insecure_tls, **kwargs):
             self.on_open = on_open
             self.on_depth = on_depth
 
@@ -69,7 +69,7 @@ def test_no_orderbook_rows_until_synced(monkeypatch, tmp_path):
 
     symbol = "ETHUSDT"
     day = recorder_mod.compute_window(recorder_mod.window_now())[0].strftime("%Y%m%d")
-    day_dir = tmp_path / "data" / symbol / day
+    day_dir = tmp_path / "data" / "binance" / symbol / day
     orderbook_path = day_dir / f"orderbook_ws_depth_{symbol}_{day}.csv.gz"
 
     rows = list(csv.reader(gzip.open(orderbook_path, 'rt', encoding='utf-8', newline='')))
