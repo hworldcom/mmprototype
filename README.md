@@ -86,6 +86,16 @@ To rebuild the order book for a day:
 
 Replay should ignore diffs received before the initial snapshot is loaded. The `events_*.csv.gz` ledger provides the authoritative timeline (window boundaries, reconnects, resync tags).
 
+### Replay validator
+
+An offline validator is included to replay recorded diffs against snapshots and confirm reconciliation:
+
+```bash
+python -m mm_recorder.replay_validator --day-dir data/<EXCHANGE>/<SYMBOL_FS>/<YYYYMMDD>
+```
+
+It returns exit code `0` if no gaps are detected, and `1` if any gap/checksum mismatch is found.
+
 ## Tests
 
 ```bash

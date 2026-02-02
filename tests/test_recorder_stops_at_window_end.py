@@ -157,7 +157,52 @@ def test_recorder_buffered_warns_without_unbound_error(tmp_path, monkeypatch):
         def feed_depth_event(self, _data):
             return FakeResult()
 
-    monkeypatch.setattr(rec, "OrderBookSyncEngine", FakeEngine)
+    class FakeAdapter:
+        sync_mode = "sequence"
+
+        def normalize_depth(self, depth):
+            return depth
+
+        def normalize_symbol(self, symbol):
+            return symbol
+
+        def ws_url(self, symbol):
+            return "wss://example"
+
+        def subscribe_messages(self, symbol, depth):
+            return []
+
+        @property
+        def uses_custom_ws_messages(self):
+            return False
+
+        def parse_depth(self, data):
+            from mm_recorder.exchanges.types import DepthDiff
+            return DepthDiff(
+                event_time_ms=int(data.get("E", 0)),
+                U=int(data.get("U", 0)),
+                u=int(data.get("u", 0)),
+                bids=data.get("b", []),
+                asks=data.get("a", []),
+                raw=data,
+            )
+
+        def parse_trade(self, data):
+            from mm_recorder.exchanges.types import Trade
+            return Trade(
+                event_time_ms=int(data.get("E", 0)),
+                trade_id=int(data.get("t", 0)),
+                trade_time_ms=int(data.get("T", 0)),
+                price=float(data.get("p", 0)),
+                qty=float(data.get("q", 0)),
+                is_buyer_maker=int(data.get("m", 0)),
+                raw=data,
+            )
+
+        def create_sync_engine(self, depth):
+            return FakeEngine()
+
+    monkeypatch.setattr(rec, "get_adapter", lambda name: FakeAdapter())
 
     def _dummy_record_rest_snapshot(**kwargs):
         from mm_core.local_orderbook import LocalOrderBook

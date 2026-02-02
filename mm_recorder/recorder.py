@@ -194,6 +194,8 @@ def run_recorder():
         state.event_id += 1
         return state.event_id
 
+    sub_depth = adapter.normalize_depth(DEPTH_LEVELS)
+
     # Outputs
     ob_path = day_dir / f"orderbook_ws_depth_{symbol_fs}_{day_str}.csv.gz"
     tr_path = day_dir / f"trades_ws_{symbol_fs}_{day_str}.csv.gz"
@@ -283,6 +285,7 @@ def run_recorder():
             "path": f"diffs/depth_diffs_{symbol_fs}_{day_str}.ndjson.gz",
             "format": "ndjson.gz",
             "fields": diff_fields,
+            "depth": sub_depth,
         }
     write_schema(schema_path, files_schema)
 
@@ -340,7 +343,6 @@ def run_recorder():
     if STORE_DEPTH_DIFFS:
         log.info("Diffs out:       %s", diff_path)
 
-    sub_depth = adapter.normalize_depth(DEPTH_LEVELS)
     engine = adapter.create_sync_engine(sub_depth)
 
     state = RecorderState(
@@ -761,7 +763,7 @@ def run_recorder():
             insecure_tls=INSECURE_TLS,
         )
 
-        emit_event("run_start", {"symbol": symbol, "symbol_fs": symbol_fs, "day": day_str})
+    emit_event("run_start", {"symbol": symbol, "symbol_fs": symbol_fs, "day": day_str})
     log.info("Connecting WS: %s", ws_url)
 
     try:
