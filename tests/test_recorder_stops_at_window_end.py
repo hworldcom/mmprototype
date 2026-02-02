@@ -4,7 +4,7 @@ import csv
 from datetime import datetime
 from pathlib import Path
 
-import mm.market_data.recorder as rec
+import mm_recorder.recorder as rec
 
 
 class FakeStream:
@@ -85,7 +85,7 @@ def test_recorder_emits_window_end_and_stops(tmp_path, monkeypatch):
     # Avoid requiring python-binance for REST snapshots in unit tests.
     def _dummy_record_rest_snapshot(**kwargs):
         # Return: (lob, path, last_uid)
-        from mm.market_data.local_orderbook import LocalOrderBook
+        from mm_core.local_orderbook import LocalOrderBook
 
         out = Path(kwargs["snapshots_dir"]) / "snapshot_dummy.csv.gz"
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -160,7 +160,7 @@ def test_recorder_buffered_warns_without_unbound_error(tmp_path, monkeypatch):
     monkeypatch.setattr(rec, "OrderBookSyncEngine", FakeEngine)
 
     def _dummy_record_rest_snapshot(**kwargs):
-        from mm.market_data.local_orderbook import LocalOrderBook
+        from mm_core.local_orderbook import LocalOrderBook
 
         out = Path(kwargs["snapshots_dir"]) / "snapshot_dummy.csv.gz"
         out.parent.mkdir(parents=True, exist_ok=True)

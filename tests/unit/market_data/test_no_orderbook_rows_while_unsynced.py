@@ -3,7 +3,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import gzip
 
-import mm.market_data.recorder as recorder_mod
+import mm_recorder.recorder as recorder_mod
 
 
 class DummyLob:

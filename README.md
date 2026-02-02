@@ -1,381 +1,95 @@
-# Avellaneda–Stoikov Market Making Research Project
+# Market Data Module
 
-## Objective
+This package houses every component required to capture Binance Spot depth and trade data, reconstruct level-2 books, and persist replay-ready artifacts for downstream research.
 
-The goal of this project is to **research, test, and validate market‑making models**, with a primary focus on the **Avellaneda–Stoikov framework**, before any production deployment.
+It includes the `mm_core` package for the shared order book and sync state machine.
+The recorder avoids `python-binance` and calls the public REST depth endpoint directly
+for snapshots; if you later need signed endpoints or user streams, you can reintroduce it.
 
-This repository is intentionally structured as a **research pipeline**, not a ready‑made trading bot.
+## Architecture
 
----
+| File | Responsibility |
+|------|----------------|
+| `mm_recorder/recorder.py` | End-to-end orchestration: enforces the Berlin trading window, wires callbacks, persists CSV/NDJSON outputs, and emits telemetry/events. |
+| `mm_core/sync_engine.py` | Pure state machine that bridges REST snapshots with WebSocket depth diffs and detects any sequencing gap. |
+| `mm_core/local_orderbook.py` | Lightweight in-memory book keyed by price, used by the recorder and sync engine. |
+| `mm_recorder/buffered_writer.py` | Buffered CSV writer that batches rows in memory to reduce fsync pressure. |
+| `mm_recorder/ws_stream.py` | Async websocket client with reconnect, ping/pong, and backoff. |
+| `mm_recorder/snapshot.py` | REST snapshot helper that serializes snapshots to disk for audit and resyncs. |
 
-## Why This Project Exists
+The repository includes tests that validate epochs, header handling, and recorder output contracts. Those tests run offline thanks to the client-creation guard in `recorder.py`.
 
-Market making models depend critically on:
-- execution uncertainty
-- inventory risk
-- order arrival dynamics
-- market microstructure
+## Output contract
 
-Without realistic data and fill assumptions, theoretical results are misleading.
-This project exists to close that gap.
+Each recorder run (one symbol per process) produces the following files under `data/<SYMBOL>/<YYYYMMDD>/`:
 
----
+- `orderbook_ws_depth_<SYMBOL>_<YYYYMMDD>.csv.gz` — top-N book frames whenever the local book is synced.
+- `trades_ws_<SYMBOL>_<YYYYMMDD>.csv.gz` — individual trade prints with event/receive timestamps and trade identifiers.
+- `events_<SYMBOL>_<YYYYMMDD>.csv.gz` — authoritative ledger covering WS lifecycle, snapshot tags, resync epochs, and run boundaries.
+- `gaps_<SYMBOL>_<YYYYMMDD>.csv.gz` — optional audit of detected sequencing issues.
+- `snapshots/snapshot_<event_id>_<tag>.csv` — REST snapshots referenced by the events ledger.
+- `diffs/depth_diffs_<SYMBOL>_<YYYYMMDD>.ndjson.gz` — optional compressed raw WS diffs for exact replays.
 
-## What Is Required to Test Market‑Making Models
+Uncompressed outputs are intentionally not supported. Avoid renaming columns or folders unless you also update downstream consumers.
 
-To correctly test an Avellaneda–Stoikov‑style strategy we need:
+## Running the recorder
 
-- L2 order book states (bids & asks)
-- Executed trade flow
-- Exchange timestamps
-- Robust fill models
-- Deterministic backtesting
+1. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+2. Export the target symbol (case-insensitive):
+   ```bash
+   export SYMBOL=ETHUSDT
+   ```
+3. Launch the recorder:
+   ```bash
+   python -m mm_recorder.recorder
+   ```
 
----
+### Local run notes
 
-## Repository Skeleton
+- Logs are written to `logs/recorder/<SYMBOL>/<YYYY-MM-DD>.log`.
+- If your local TLS inspection blocks the websocket handshake, set `INSECURE_TLS=1`
+  (only for local debugging).
 
-```
-.
-├── README.md
-├── requirements.txt
-├── Dockerfile / Makefile
-├── data/                  # Recorder output (per symbol/day). Shared with backtests.
-├── mm/
-│   ├── market_data/
-│   │   ├── README.md
-│   │   ├── recorder.py
-│   │   ├── sync_engine.py
-│   │   ├── local_orderbook.py
-│   │   ├── buffered_writer.py
-│   │   ├── ws_stream.py
-│   │   └── snapshot.py
-│   ├── calibration/
-│   │   ├── runner_calibration.py
-│   │   ├── exposure.py
-│   │   ├── poisson_fit.py
-│   │   └── quotes/
-│   └── backtest/
-│       ├── README.md
-│       ├── replay.py
-│       ├── paper_exchange.py
-│       ├── io.py
-│       ├── fills/
-│       └── quotes/
-├── tests/                 # Recorder and sync-engine unit tests
-└── logs/, restore/, etc.  # Environment-specific artifacts
-```
-
-`mm/market_data` is the producer of historical datasets; `mm/backtest` consumes them for deterministic replay. Both subtrees have their own README files referenced below.
-
----
-
-## Current State (Implemented)
-
-### Repository Structure
-
-| Path | Purpose | Key dependency |
-|------|---------|----------------|
-| `mm/market_data/` | Real-time recorder that captures Binance Spot depth/trade streams, reconstructs the local order book, and writes CSV / NDJSON artifacts plus an events ledger. | Consumed by `mm/backtest`, documented in `mm/market_data/README.md`. |
-| `mm/calibration/` | Parameter calibration utilities that *produce* inputs for later backtests (e.g. Poisson A,k). | Consumes recorder outputs and emits JSON/CSV artifacts under `out/calibration/`. |
-| `mm/backtest/` | Offline replay, paper exchange, and fill-model experiments that operate on recorded data. | Requires recorder outputs (same folder layout) at runtime; documented in `mm/backtest/README.md`. |
-
-These subtrees now ship with their own READMEs for day-to-day usage, whereas this root README stays focused on the overarching goals and roadmap.
-
----
-
-## Run Logs (Backtest + Calibration)
-
-Batch jobs (backtests and calibration runs) write **run-scoped logs** to make debugging deterministic.
-
-Default layout:
-
-```
-out/logs/
-  backtest/<SYMBOL>/<YYYYMMDD>/<RUN_ID>/run.log
-  calibration/<METHOD>/<SYMBOL>/<YYYYMMDD>/<RUN_ID>/run.log
-```
-
-Controls:
-- `LOG_LEVEL` (default: `INFO`; set `DEBUG` when investigating)
-- `LOG_ROOT` (default: `out/logs`)
-- `RUN_ID` (default: autogenerated UTC timestamp)
-
----
-
-## Calibration
-
-The project supports **walk-forward calibration** of fill models (notably the Poisson/Avellaneda–Stoikov arrival model).
-
-For day-to-day usage, calibration is typically run in **Mode B (schedule-only)**, which produces a reusable time-indexed
-parameter schedule (e.g., a new `(A,k)` every 15 minutes fit on a prior 2-hour window) without running a strategy backtest.
-
-Calibration artifacts are written under:
-
-```
-out/calibration/schedules/<SYMBOL>/<YYYYMMDD>_<RUN_ID>/
-```
-
-See `mm/calibration/README.md` for the formal process description, configuration knobs, Docker examples, and troubleshooting.
-
-### Market Data Collection
-
-- WebSocket‑based data ingestion
-- Binance Spot exchange
-- Order book diff stream (`@depth@100ms`)
-- Trade stream (`@trade`, upgradeable to `@aggTrade`)
-- Local order book reconstruction using:
-  - REST snapshot
-  - WebSocket diffs
-  - update‑ID sequencing
-- Data persisted to CSV
-- Berlin trading window: **08:00–22:00 Europe/Berlin**
-- Dockerized & cron‑friendly
-
----
-
-## Recorded Data Files
-
-Per symbol, per day:
-
-- `snapshots/snapshot_<event_id>_<tag>.csv`
-- `orderbook_ws_depth_<SYMBOL>_<YYYYMMDD>.csv.gz`
-- `trades_ws_<SYMBOL>_<YYYYMMDD>.csv.gz`
-- `events_<SYMBOL>_<YYYYMMDD>.csv.gz`
-- `gaps_<SYMBOL>_<YYYYMMDD>.csv.gz` (optional, for diagnostics)
-- `diffs/depth_diffs_<SYMBOL>_<YYYYMMDD>.ndjson.gz` (optional raw WS diffs)
-
-Uncompressed market-data files (`.csv`, `.ndjson`, `.jsonl`) are **not supported** by the replay/backtest readers. If you have legacy uncompressed outputs, convert them in-place with `./scripts/compress_existing_data.sh`.
-
-All numeric values are stored in **human‑readable fixed decimals**.
-
----
-
-## Project Roadmap
-
-### Phase 1 — Market Data
-- [x] REST order book snapshot
-- [x] WebSocket depth stream
-- [x] Local order book reconstruction
-- [x] Trade stream
-- [ ] Switch to aggTrades
-- [ ] Latency metrics
-- [ ] Data validation
-
-### Phase 2 — Backtesting Engine
-- [x] Order book replay (snapshot + WS diffs)
-- [x] Trade replay (trade stream)
-- [x] Time‑aligned simulation (recv_ms merge)
-
-### Phase 3 — Fill Models
-- [x] Trade‑driven (trade_cross)
-- [x] Poisson (Avellaneda–Stoikov)
-- [x] Hybrid
-- [ ] Price‑cross (L1/L2 cross-based)
-
-### Phase 4 — Strategy Research
-- [ ] Quoting logic
-- [ ] Parameter calibration
-- [ ] Inventory control
-- [ ] PnL attribution
-
-### Phase 3.5 — Calibration (Prerequisite)
-- [x] Poisson fill calibration runners (ladder sweep and fixed-spread runs)
-- [x] Backtest ingestion of calibration outputs (FILL_PARAMS_FILE)
-
-### Phase 5 — Live / Testnet
-- [ ] Testnet trading
-- [ ] Shadow trading
-- [ ] Monitoring
-- [ ] Gradual production rollout
-
----
-
-# Binance Market Data Recorder (Depth + Trades + Events Ledger)
-
-One process per symbol. Produces the following per day:
-
-- `orderbook_ws_depth_<SYMBOL>_<YYYYMMDD>.csv.gz`: top-N bids/asks frames (only when book is synced)
-- `trades_ws_<SYMBOL>_<YYYYMMDD>.csv.gz`: trade prints with recv timestamps
-- `events_<SYMBOL>_<YYYYMMDD>.csv.gz`: authoritative ledger for run boundaries and sync/resync epochs
-- `gaps_<SYMBOL>_<YYYYMMDD>.csv.gz`: optional stream of gap/resync diagnostics
-- `snapshots/snapshot_<event_id>_<tag>.csv`: REST snapshots referenced by `events.csv`
-- `diffs/depth_diffs_<SYMBOL>_<YYYYMMDD>.ndjson.gz`: optional gzip’d raw WS diffs for exact replay
-
-## Layout
-
-```
-data/<SYMBOL>/<YYYYMMDD>/
-  orderbook_ws_depth_<SYMBOL>_<YYYYMMDD>.csv.gz
-  trades_ws_<SYMBOL>_<YYYYMMDD>.csv.gz
-  events_<SYMBOL>_<YYYYMMDD>.csv.gz
-  gaps_<SYMBOL>_<YYYYMMDD>.csv.gz
-  snapshots/
-    snapshot_<event_id>_<tag>.csv
-  diffs/
-    depth_diffs_<SYMBOL>_<YYYYMMDD>.ndjson.gz
-
-### File descriptions
-
-- `orderbook_ws_depth_<SYMBOL>_<YYYYMMDD>.csv.gz` — book frames (timestamps, run/epoch ids, top-N ladders).
-- `trades_ws_<SYMBOL>_<YYYYMMDD>.csv.gz` — WebSocket trades with event/recv timestamps, run id, price, quantity, aggressor flag.
-- `events_<SYMBOL>_<YYYYMMDD>.csv.gz` — lifecycle ledger documenting run start/stop, snapshot requests, loads, resyncs, and window boundaries.
-- `gaps_<SYMBOL>_<YYYYMMDD>.csv.gz` — optional diagnostics for gap detection, including timestamps and free-form details.
-- `snapshots/` — tagged CSV snapshots keyed by run/event id, referenced by `events.csv`.
-- `diffs/` — gzipped NDJSON stream of raw depth diffs for exact replay alignment.
-```
-
-## Run
+## Tests
 
 ```bash
-pip install -r requirements.txt
-SYMBOL=ETHUSDT python -m mm.market_data.recorder
+python3 -m pytest -q
 ```
 
-Docker:
-
-```bash
-docker build -t mm-recorder:latest .
-docker run --rm -e SYMBOL=ETHUSDT -v "$PWD/data":/app/data mm-recorder:latest
-```
-
-## Backtesting inputs
-
-Load:
-- `orderbook_ws_depth_<SYMBOL>_<YYYYMMDD>.csv.gz` (filter `epoch_id >= 1`)
-- `trades_ws_<SYMBOL>_<YYYYMMDD>.csv.gz` (align by `event_time_ms`)
-- `events_<SYMBOL>_<YYYYMMDD>.csv.gz` (optional: segment by `epoch_id`, diagnose gaps, run boundaries)
-
----
-
-## Folder READMEs
-
-- `mm/market_data/README.md` — recorder configuration, environment variables, data layout, and how to orchestrate daily runs. Emphasizes the contract consumed by backtests.
-- `mm/backtest/README.md` — describes the replay engines, how to point them at recorded datasets, and how to extend fill models or paper exchanges.
-
-The recorder is the producer and the backtest is the consumer. Keep their shared `data/<SYMBOL>/<YYYYMMDD>/` structure intact so you can freely move sessions between live capture boxes and research machines.
-
----
-
-## Running a backtest
-
-```bash
-pip install -r requirements.txt
-
-# Example (spot): run a single day
-DAY=20251216 SYMBOL=BTCUSDT python -m mm.runner_backtest
-```
-
----
-
-## Calibrating Poisson fill parameters (A,k)
-
-Calibration is treated as a prerequisite step: it **produces** parameters which
-later backtests **consume**.
-
-Outputs are written under:
+### Docker
 
 ```
-out/calibration/<method>/<SYMBOL>/<DAY>_<timestamp>/
-  calibration_points.csv
-  poisson_fit.json
-  run_manifest.json
-  (per-run folders with orders/fills/state)
+docker build -t mm-recorder .
+docker run --rm \
+  -e SYMBOL=ETHUSDT \
+  -v "$PWD/data":/app/data \
+  mm-recorder
 ```
 
-### Design A: Ladder sweep (recommended for calibration)
+If you vendor this repo into another build context, ensure `mm_core` is present alongside `mm_recorder`.
 
-Runs a single day replay while cycling through a list of deltas (`--deltas`) and
-holding each delta for `--dwell-ms`.
+### Configuration knobs
 
-```bash
-pip install -r requirements.txt
+| Variable/Const | Meaning |
+|----------------|---------|
+| `SYMBOL` (env) | Trading pair to subscribe (e.g., `BTCUSDT`). Required. |
+| `DEPTH_LEVELS` | Number of L2 levels persisted per book snapshot row. |
+| `STORE_DEPTH_DIFFS` | Toggle gzip’d NDJSON logging of raw WS depth diffs for replay. |
+| `WS_PING_INTERVAL_S`, `WS_PING_TIMEOUT_S` | Client ping cadence and pong timeout (seconds). |
+| `WS_RECONNECT_BACKOFF_S`, `WS_RECONNECT_BACKOFF_MAX_S` | Reconnect backoff base and cap (seconds). |
+| `WS_MAX_SESSION_S` | Max WS session duration before forced reconnect (seconds). |
+| `WINDOW_TZ` (env) | Timezone used for start/end windows (default: `Europe/Berlin`). |
+| `WINDOW_START_HHMM` (env) | Window start time in 24h `HH:MM` (default: `00:00`). |
+| `WINDOW_END_HHMM` (env) | Window end time in 24h `HH:MM` (default: `00:15`). |
+| `WINDOW_END_DAY_OFFSET` (env) | Day offset added to the end time (default: `1`). Use `1` for next-day cutoff. |
+| `HEARTBEAT_SEC`, `SYNC_WARN_AFTER_SEC`, `MAX_BUFFER_WARN` | Telemetry cadence and warning thresholds. |
+| `ORDERBOOK_BUFFER_ROWS`, `TRADES_BUFFER_ROWS`, `BUFFER_FLUSH_INTERVAL_SEC` | Tune throughput vs. fsync pressure. |
 
-python -m mm.calibration.runner_calibration \
-  --method ladder \
-  --symbol BTCUSDT \
-  --day 20251216 \
-  --deltas 1,2,3,5,8,13 \
-  --dwell-ms 60000 \
-  --fit-method poisson_mle
-```
+### Dependencies and testing notes
 
-### Design B: Fixed-spread runs (easy operationally)
-
-Runs multiple backtests (one per delta) and fits across runs.
-
-```bash
-python -m mm.calibration.runner_calibration \
-  --method fixed \
-  --symbol BTCUSDT \
-  --day 20251216 \
-  --deltas 1,2,3,5,8,13 \
-  --fit-method poisson_mle
-```
-
-### Rolling schedule (Mode B)
-
-If you want a **time-varying** Poisson parameter schedule (e.g. a new `(A,k)` every 15 minutes, each fit on the prior 2 hours),
-use the schedule-only runner. This produces a reusable artifact and does **not** run any quoting strategy backtest:
-
-```bash
-python -m mm.runner_calibrate_schedule \
-  --symbol BTCUSDT \
-  --day 20251216 \
-  --data-root data \
-  --out-root out \
-  --tick-size 0.01 \
-  --train-window-min 120 \
-  --step-min 15 \
-  --deltas 1,2,3,5,8,13 \
-  --dwell-ms 60000 \
-  --fit-method poisson_mle
-```
-
-Outputs:
-
-```
-out/calibration/schedules/<SYMBOL>/<DAY>_<RUN_ID>/
-  poisson_schedule.json
-  window_metrics.csv
-  manifest.json
-  calibration_windows/...
-```
-
-Use `calibration_schedule_qa.ipynb` to QA coverage and parameter stability.
-
-### Using calibration outputs in backtests
-
-Point the backtest runner at the `poisson_fit.json` file:
-
-```bash
-export FILL_MODEL=poisson
-export FILL_PARAMS_FILE=out/calibration/ladder/BTCUSDT/20251216_<timestamp>/poisson_fit.json
-
-DAY=20251216 SYMBOL=BTCUSDT python -m mm.runner_backtest
-```
-
-Outputs are written to `out_backtest/` by default:
-
-- `orders_<SYMBOL>.csv` — order lifecycle log (place/cancel/fill/close)
-- `fills_<SYMBOL>.csv` — executed fills including fees
-- `state_<SYMBOL>.csv` — inventory/cash/mark-to-market snapshots
-
-See `mm/backtest/README.md` for environment variables controlling latency, TTL/GTC, tick size and initial balances.
-
-## Running tests
-
-```bash
-pytest -q
-```
-
-
-## Walk-forward calibration (rolling window)
-
-A rolling-window calibration + continuous backtest runner is available:
-
-```bash
-python -m mm.runner_walkforward --symbol BTCUSDT --day YYYYMMDD --data-root data --out-root out
-```
-
-See `mm/walkforward/README.md` for full details.
+- `mm_recorder.logging_config` is used to configure per-run logging.
+- `mm_core` supplies the shared order book and sync engine.
+- Tests under `tests/` monkeypatch `record_rest_snapshot`; `recorder.py` only instantiates a real `binance.Client` when the original function is in use.

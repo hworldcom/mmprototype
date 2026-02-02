@@ -4,8 +4,8 @@ from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-import mm.market_data.recorder as recorder_mod
-from mm.market_data.local_orderbook import LocalOrderBook
+import mm_recorder.recorder as recorder_mod
+from mm_core.local_orderbook import LocalOrderBook
 
 
 def test_recorder_writes_diffs_and_resync(monkeypatch, tmp_path):
