@@ -10,7 +10,7 @@ from typing import Any, Iterable, List, Optional
 
 from mm_core.local_orderbook import LocalOrderBook
 from mm_core.sync_engine import OrderBookSyncEngine, SyncResult
-from mm_core.checksum_engine import KrakenSyncEngine
+from mm_core.checksum.kraken import KrakenSyncEngine
 from mm_recorder.exchanges.types import BookSnapshot, DepthDiff
 
 

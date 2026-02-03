@@ -6,7 +6,7 @@ from decimal import Decimal
 
 from .base import ExchangeAdapter
 from .types import DepthDiff, Trade, BookSnapshot
-from mm_core.checksum_engine import KrakenSyncEngine
+from mm_core.checksum.kraken import KrakenSyncEngine
 
 
 def _as_level_list(levels: List[Dict[str, Any]] | List[List[str]]) -> List[List[str]]:

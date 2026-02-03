@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Tuple
 
 from mm_core.local_orderbook import LocalOrderBook
 from mm_core.sync_engine import SyncResult
-from mm_recorder.exchanges.types import DepthDiff, BookSnapshot
+from .base import DepthDiff, BookSnapshot
 
 
 def _norm_crc_str(val: str) -> str:
