@@ -95,6 +95,7 @@ class RecorderState:
     phase: RecorderPhase = RecorderPhase.CONNECTING
     last_ws_msg_time: float | None = None
     last_no_data_warn: float = 0.0
+    first_data_emitted: bool = False
 
 
 def _parse_hhmm(value: str, label: str) -> tuple[int, int]:
@@ -627,6 +628,10 @@ def run_recorder():
         state.depth_msg_count += 1
         state.last_depth_event_ms = int(parsed.event_time_ms)
         state.last_ws_msg_time = time.time()
+        if not state.first_data_emitted:
+            state.first_data_emitted = True
+            emit_event("ws_first_data", {"type": "depth"})
+            log.info("WS data flowing (first depth message).")
 
         # Always store raw diffs for replay, even when not synced
         if diff_writer is not None:
@@ -696,6 +701,10 @@ def run_recorder():
         state.trade_msg_count += 1
         state.last_trade_event_ms = int(parsed.event_time_ms)
         state.last_ws_msg_time = time.time()
+        if not state.first_data_emitted:
+            state.first_data_emitted = True
+            emit_event("ws_first_data", {"type": "trade"})
+            log.info("WS data flowing (first trade message).")
 
         msg_recv_seq = next_recv_seq()
 
@@ -755,6 +764,10 @@ def run_recorder():
 
     def on_message(data: dict, recv_ms: int):
         state.last_ws_msg_time = time.time()
+        if not state.first_data_emitted:
+            state.first_data_emitted = True
+            emit_event("ws_first_data", {"type": "custom"})
+            log.info("WS data flowing (first custom message).")
         if isinstance(data, dict) and data.get("method") == "subscribe":
             emit_event(
                 "ws_subscribe_ack",
