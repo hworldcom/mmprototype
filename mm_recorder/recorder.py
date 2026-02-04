@@ -245,6 +245,10 @@ def run_recorder():
         "price",
         "qty",
         "is_buyer_maker",
+        "side",
+        "ord_type",
+        "exchange",
+        "symbol",
     ]
 
 
@@ -500,6 +504,15 @@ def run_recorder():
         write_gap("resync_start", reason)
         emit_event("resync_start", {"reason": reason, "tag": tag})
 
+        if "checksum_mismatch" in reason and hasattr(engine, "last_checksum_payload"):
+            payload = getattr(engine, "last_checksum_payload", None)
+            if payload:
+                debug_dir = day_dir / "debug"
+                debug_dir.mkdir(parents=True, exist_ok=True)
+                path = debug_dir / f"checksum_payload_{tag}.txt"
+                path.write_text(payload)
+                emit_event("checksum_payload_saved", {"tag": tag, "path": str(path)})
+
         engine.reset_for_resync()
 
         if adapter.sync_mode == "checksum":
@@ -687,6 +700,9 @@ def run_recorder():
         msg_recv_seq = next_recv_seq()
 
         try:
+            side = parsed.side
+            if side is None:
+                side = "sell" if int(parsed.is_buyer_maker) == 1 else "buy"
             tr_writer.write_row(
                 [
                     int(parsed.event_time_ms),
@@ -698,6 +714,10 @@ def run_recorder():
                     f"{float(parsed.price):.{DECIMALS}f}",
                     f"{float(parsed.qty):.{DECIMALS}f}",
                     int(parsed.is_buyer_maker),
+                    side or "",
+                    parsed.ord_type or "",
+                    exchange,
+                    symbol,
                 ]
             )
             state.tr_rows_written += 1
@@ -746,6 +766,19 @@ def run_recorder():
             )
             if data.get("error"):
                 log.warning("WS subscribe error: %s", data.get("error"))
+        elif isinstance(data, dict) and data.get("event") == "error":
+            emit_event("ws_error_payload", {"error": data.get("msg") or data})
+            log.warning("WS error payload: %s", data.get("msg") or data)
+        elif isinstance(data, dict) and data.get("event") == "info":
+            code = data.get("code")
+            emit_event("ws_info", {"code": code, "msg": data.get("msg")})
+            if code == 20051:
+                emit_event("ws_info_reconnect", {"code": code, "msg": data.get("msg")})
+                try:
+                    if stream:
+                        stream.disconnect()
+                except Exception:
+                    log.exception("Failed to disconnect after ws_info reconnect")
         elif isinstance(data, dict) and data.get("error"):
             emit_event("ws_error_payload", {"error": data.get("error")})
             log.warning("WS error payload: %s", data.get("error"))

@@ -27,12 +27,15 @@ class BinanceAdapter(ExchangeAdapter):
         )
 
     def parse_trade(self, data: dict) -> Trade:
+        is_buyer_maker = int(data.get("m", 0))
+        side = "sell" if is_buyer_maker == 1 else "buy"
         return Trade(
             event_time_ms=int(data.get("E", 0)),
             trade_id=int(data.get("t", 0)),
             trade_time_ms=int(data.get("T", 0)),
             price=float(data.get("p", 0)),
             qty=float(data.get("q", 0)),
-            is_buyer_maker=int(data.get("m", 0)),
+            is_buyer_maker=is_buyer_maker,
+            side=side,
             raw=data,
         )

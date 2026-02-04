@@ -16,8 +16,9 @@ def _signed_crc(val: int) -> int:
 
 class BitfinexBook:
     def __init__(self, depth: int) -> None:
-        self.bids: Dict[Decimal, str] = {}
-        self.asks: Dict[Decimal, str] = {}
+        # price -> (price_str, count_str, amount_str)
+        self.bids: Dict[Decimal, tuple[str, str, str]] = {}
+        self.asks: Dict[Decimal, tuple[str, str, str]] = {}
         self.depth = int(depth)
 
     def _trim(self) -> None:
@@ -33,10 +34,28 @@ class BitfinexBook:
     def load_snapshot(self, bids: List[List[str]], asks: List[List[str]]) -> None:
         self.bids.clear()
         self.asks.clear()
-        for p, q in bids:
-            self.bids[Decimal(p)] = str(q)
-        for p, q in asks:
-            self.asks[Decimal(p)] = str(q)
+        for row in bids:
+            if not row:
+                continue
+            if len(row) >= 3:
+                price_str, count_str, amount_str = str(row[0]), str(row[1]), str(row[2])
+            else:
+                price_str, amount_str = str(row[0]), str(row[1])
+                count_str = "1"
+            if amount_str.startswith("-"):
+                amount_str = amount_str[1:]
+            self.bids[Decimal(price_str)] = (price_str, count_str, amount_str)
+        for row in asks:
+            if not row:
+                continue
+            if len(row) >= 3:
+                price_str, count_str, amount_str = str(row[0]), str(row[1]), str(row[2])
+            else:
+                price_str, amount_str = str(row[0]), str(row[1])
+                count_str = "1"
+            if amount_str.startswith("-"):
+                amount_str = amount_str[1:]
+            self.asks[Decimal(price_str)] = (price_str, count_str, amount_str)
         self._trim()
 
     def apply_update(self, price: str, count: int, amount: str) -> None:
@@ -49,31 +68,65 @@ class BitfinexBook:
                 self.bids.pop(px, None)
             return
         if amt < 0:
-            self.asks[px] = str(amt)
+            amt_str = str(amount)
+            if amt_str.startswith("-"):
+                amt_str = amt_str[1:]
+            self.asks[px] = (price, str(count), amt_str)
         else:
-            self.bids[px] = str(amt)
+            amt_str = str(amount)
+            if amt_str.startswith("-"):
+                amt_str = amt_str[1:]
+            self.bids[px] = (price, str(count), amt_str)
         self._trim()
 
     def top_n(self, n: int) -> Tuple[List[Tuple[float, float]], List[Tuple[float, float]]]:
         bids_sorted = sorted(self.bids.items(), key=lambda x: x[0], reverse=True)[:n]
         asks_sorted = sorted(self.asks.items(), key=lambda x: x[0])[:n]
         return (
-            [(float(p), abs(float(q))) for p, q in bids_sorted],
-            [(float(p), abs(float(q))) for p, q in asks_sorted],
+            [(float(p), abs(float(Decimal(q[2])))) for p, q in bids_sorted],
+            [(float(p), abs(float(Decimal(q[2])))) for p, q in asks_sorted],
         )
 
-    def checksum(self, n: int = 25) -> int:
+    def checksum(self, n: int = 25, abs_asks: bool = False, abs_all: bool = False, interleave: bool = True) -> int:
+        payload = self.checksum_payload(n, abs_asks=abs_asks, abs_all=abs_all, interleave=interleave).encode()
+        return _signed_crc(binascii.crc32(payload) & 0xFFFFFFFF)
+
+    def checksum_payload(
+        self, n: int = 25, abs_asks: bool = False, abs_all: bool = False, interleave: bool = True
+    ) -> str:
         asks_sorted = sorted(self.asks.items(), key=lambda x: x[0])[:n]
         bids_sorted = sorted(self.bids.items(), key=lambda x: x[0], reverse=True)[:n]
         parts: List[str] = []
-        for p, q in bids_sorted:
-            parts.append(str(p))
-            parts.append(str(q))
-        for p, q in asks_sorted:
-            parts.append(str(p))
-            parts.append(str(q))
-        payload = ":".join(parts).encode()
-        return _signed_crc(binascii.crc32(payload) & 0xFFFFFFFF)
+        if interleave:
+            for i in range(n):
+                if i < len(bids_sorted):
+                    _, (p_str, _c_str, a_str) = bids_sorted[i]
+                    if abs_all and a_str.startswith("-"):
+                        a_str = a_str[1:]
+                    parts.append(p_str)
+                    parts.append(a_str)
+                if i < len(asks_sorted):
+                    _, (p_str, _c_str, a_str) = asks_sorted[i]
+                    if (abs_all or abs_asks) and a_str.startswith("-"):
+                        a_str = a_str[1:]
+                    if not a_str.startswith("-"):
+                        a_str = f"-{a_str}"
+                    parts.append(p_str)
+                    parts.append(a_str)
+        else:
+            for _, (p_str, _c_str, a_str) in bids_sorted:
+                if abs_all and a_str.startswith("-"):
+                    a_str = a_str[1:]
+                parts.append(p_str)
+                parts.append(a_str)
+            for _, (p_str, _c_str, a_str) in asks_sorted:
+                if (abs_all or abs_asks) and a_str.startswith("-"):
+                    a_str = a_str[1:]
+                if not a_str.startswith("-"):
+                    a_str = f"-{a_str}"
+                parts.append(p_str)
+                parts.append(a_str)
+        return ":".join(parts)
 
 
 @dataclass
@@ -82,6 +135,7 @@ class BitfinexSyncEngine:
     depth_synced: bool = False
     snapshot_loaded: bool = False
     buffer: List[DepthDiff] = None
+    last_checksum_payload: Optional[str] = None
 
     def __init__(self, depth: int) -> None:
         self.depth = int(depth)
@@ -91,6 +145,7 @@ class BitfinexSyncEngine:
         self.snapshot_loaded = False
         self.buffer = []
         self.last_recv_seq: Optional[int] = None
+        self.last_checksum_payload = None
 
     def adopt_snapshot(self, snapshot: BookSnapshot) -> None:
         self.book.load_snapshot(snapshot.bids, snapshot.asks)
@@ -127,6 +182,21 @@ class BitfinexSyncEngine:
             calc = self.book.checksum(25)
             expected = int(ev.checksum) if ev.checksum is not None else int(raw.get("checksum", 0))
             if int(calc) != int(expected):
-                return SyncResult("gap", f"checksum_mismatch expected={expected} got={calc}")
+                alt_asks = self.book.checksum(25, abs_asks=True)
+                if int(alt_asks) == int(expected):
+                    return SyncResult("applied", "checksum_ok_abs_asks")
+                alt_all = self.book.checksum(25, abs_all=True)
+                if int(alt_all) == int(expected):
+                    return SyncResult("applied", "checksum_ok_abs_all")
+                alt_non = self.book.checksum(25, interleave=False)
+                if int(alt_non) == int(expected):
+                    return SyncResult("applied", "checksum_ok_non_interleaved")
+                payload = self.book.checksum_payload(25)
+                self.last_checksum_payload = payload
+                preview = payload[:200]
+                return SyncResult(
+                    "gap",
+                    f"checksum_mismatch expected={expected} got={calc} payload={preview}",
+                )
 
         return SyncResult("applied", "checksum_ok")

@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def write_schema(path: Path, files: Mapping[str, Any]) -> None:

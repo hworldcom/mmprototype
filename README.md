@@ -12,7 +12,8 @@ for snapshots; if you later need signed endpoints or user streams, you can reint
 |------|----------------|
 | `mm_recorder/recorder.py` | End-to-end orchestration: enforces the Berlin trading window, wires callbacks, persists CSV/NDJSON outputs, and emits telemetry/events. |
 | `mm_core/sync_engine.py` | Pure state machine that bridges REST snapshots with WebSocket depth diffs and detects any sequencing gap. |
-| `mm_core/checksum_engine.py` | Checksum-based sync engine for exchanges like Kraken (verifies CRC checksums instead of sequence ids). |
+| `mm_core/checksum/kraken.py` | Checksum-based sync engine for exchanges like Kraken (verifies CRC checksums instead of sequence ids). |
+| `mm_core/checksum/bitfinex.py` | Checksum-based sync engine for Bitfinex (CRC checksum frames). |
 | `mm_core/local_orderbook.py` | Lightweight in-memory book keyed by price, used by the recorder and sync engine. |
 | `mm_recorder/buffered_writer.py` | Buffered CSV writer that batches rows in memory to reduce fsync pressure. |
 | `mm_recorder/ws_stream.py` | Async websocket client with reconnect, ping/pong, and backoff. |
@@ -65,15 +66,21 @@ Uncompressed outputs are intentionally not supported. Avoid renaming columns or 
 
 ### Binance (spot)
 - **Order book diffs**: `diffs/depth_diffs_*.ndjson.gz` uses Binance `depthUpdate` fields (`E`, `U`, `u`, `b`, `a`) and includes `raw` for the full payload.
-- **Trades**: `trades_ws_*.csv.gz` captures standard Binance trade fields; raw payloads are stored in `trades/trades_ws_raw_*.ndjson.gz`.
+- **Trades**: `trades_ws_*.csv.gz` captures standard Binance trade fields plus `side` (derived from maker flag), with raw payloads stored in `trades/trades_ws_raw_*.ndjson.gz`.
 - **Snapshots**: REST snapshot saved to CSV plus raw JSON (`snapshot_*.json`).
 
 ### Kraken (spot, WS v2)
 - **Order book diffs**: checksum-driven; `U/u` are `0` because Kraken doesn’t provide them. `checksum`, `exchange`, `symbol`, and `raw` are persisted in the diff NDJSON for replay verification.
-- **Trades**: `trade` channel parsed into the shared trade schema; raw payloads stored in `trades/trades_ws_raw_*.ndjson.gz`.
+- **Trades**: `trade` channel parsed into the shared trade schema with `side` and `ord_type` when present; raw payloads stored in `trades/trades_ws_raw_*.ndjson.gz`.
 - **Snapshots**: WS snapshot saved to CSV plus raw JSON (`snapshot_*.json`), with checksum stored in both the snapshot CSV and events ledger.
 
+### Bitfinex (spot, WS v2)
+- **Order book diffs**: checksum-driven (book + checksum frames). Depth normalized to 25. Updates are applied per price/count/amount; checksum frames validate state.
+- **Trades**: `trades` channel parsed into shared trade schema with `side` derived from amount sign; raw payloads stored in `trades/trades_ws_raw_*.ndjson.gz`.
+
 Note: raw JSON payloads may contain Decimal values serialized as strings to preserve precision for checksum verification.
+
+See `docs/sync_and_checksum.md` for detailed sync/checksum logic and known issues per exchange.
 
 ## Recorder state machine
 
@@ -125,7 +132,7 @@ If you vendor this repo into another build context, ensure `mm_core` is present 
 
 | Variable/Const | Meaning |
 |----------------|---------|
-| `EXCHANGE` (env) | Exchange adapter to use (default: `binance`). Supported: `binance`, `kraken`. |
+| `EXCHANGE` (env) | Exchange adapter to use (default: `binance`). Supported: `binance`, `kraken`, `bitfinex`. |
 | `SYMBOL` (env) | Trading pair to subscribe (e.g., `BTCUSDT`). Required. |
 | `DEPTH_LEVELS` | Number of L2 levels persisted per book snapshot row. |
 | `STORE_DEPTH_DIFFS` | Toggle gzip’d NDJSON logging of raw WS depth diffs for replay. |
@@ -145,4 +152,4 @@ If you vendor this repo into another build context, ensure `mm_core` is present 
 
 - `mm_recorder.logging_config` is used to configure per-run logging.
 - `mm_core` supplies the shared order book and sync engine.
-- Tests under `tests/` monkeypatch `record_rest_snapshot`; `recorder.py` only instantiates a real `binance.Client` when the original function is in use.
+- Tests under `tests/` include checksum engine coverage for Kraken/Bitfinex and monkeypatch `record_rest_snapshot`; `recorder.py` only instantiates a real `binance.Client` when the original function is in use.

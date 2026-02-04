@@ -196,6 +196,7 @@ def test_recorder_buffered_warns_without_unbound_error(tmp_path, monkeypatch):
                 price=float(data.get("p", 0)),
                 qty=float(data.get("q", 0)),
                 is_buyer_maker=int(data.get("m", 0)),
+                side="sell" if int(data.get("m", 0)) == 1 else "buy",
                 raw=data,
             )
 

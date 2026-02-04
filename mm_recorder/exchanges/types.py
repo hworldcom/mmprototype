@@ -25,6 +25,8 @@ class Trade:
     price: float
     qty: float
     is_buyer_maker: int
+    side: Optional[str] = None
+    ord_type: Optional[str] = None
     raw: Optional[Dict[str, Any]] = None
 
 

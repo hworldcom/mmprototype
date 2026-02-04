@@ -96,6 +96,10 @@ def test_headers_written_once_across_restarts(monkeypatch, tmp_path):
         "price",
         "qty",
         "is_buyer_maker",
+        "side",
+        "ord_type",
+        "exchange",
+        "symbol",
     ]
     ev_header = ["event_id", "recv_time_ms", "recv_seq", "run_id", "type", "epoch_id", "details_json"]
 

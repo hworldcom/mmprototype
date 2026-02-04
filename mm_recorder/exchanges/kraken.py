@@ -156,6 +156,8 @@ class KrakenAdapter(ExchangeAdapter):
                         price=float(entry.get("price") or 0.0),
                         qty=float(entry.get("qty") or 0.0),
                         is_buyer_maker=is_buyer_maker,
+                        side=side or None,
+                        ord_type=str(entry.get("ord_type")) if entry.get("ord_type") is not None else None,
                         raw=raw_payload,
                     )
                 )

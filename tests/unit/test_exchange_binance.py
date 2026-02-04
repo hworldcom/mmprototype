@@ -17,6 +17,7 @@ def test_binance_adapter_parse_depth_and_trade():
     assert trade.price == 100.5
     assert trade.qty == 0.1
     assert trade.is_buyer_maker == 1
+    assert trade.side == "sell"
 
 
 def test_kraken_adapter_parse_snapshot_and_update():

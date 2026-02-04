@@ -31,15 +31,17 @@ class BitfinexAdapter(ExchangeAdapter):
         s = symbol.replace("/", "").replace("-", "").replace(":", "").strip().upper()
         if not s:
             return s
-        # Bitfinex pairs use leading "t"
-        return s if s.startswith("T") else f"T{s}"
+        # Bitfinex pairs use leading "t" (lowercase)
+        if s.startswith("T"):
+            s = s[1:]
+        return f"t{s}"
 
     def normalize_depth(self, depth: int) -> int:
         # Bitfinex checksum uses top 25 bids/asks.
         return 25
 
     def ws_url(self, symbol: str) -> str:
-        return "wss://api-pub.bitfinex.com/ws/2"
+        return "wss://api.bitfinex.com/ws/2"
 
     def subscribe_messages(self, symbol: str, depth: int) -> list:
         pair = self.normalize_symbol(symbol)
@@ -97,7 +99,12 @@ class BitfinexAdapter(ExchangeAdapter):
                 asks: List[List[str]] = []
                 for price, count, amount in data[1]:
                     amount_val = Decimal(str(amount))
-                    row = [str(price), str(amount_val)]
+                    price_str = str(price)
+                    amount_str = str(amount)
+                    count_str = str(count)
+                    if amount_str.startswith("-"):
+                        amount_str = amount_str[1:]
+                    row = [price_str, count_str, amount_str]
                     if amount_val > 0:
                         bids.append(row)
                     else:
@@ -113,21 +120,37 @@ class BitfinexAdapter(ExchangeAdapter):
                 )
                 return snapshots, diffs, trades
 
-            # Update: [chanId, price, count, amount]
-            if len(data) >= 4:
-                price, count, amount = data[1], int(data[2]), Decimal(str(data[3]))
+            # Update: [chanId, [price, count, amount]] or [chanId, price, count, amount]
+            if len(data) == 2 and isinstance(data[1], list) and data[1] and not isinstance(data[1][0], list):
+                price, count, amount_raw = data[1][0], int(data[1][1]), data[1][2]
+            elif len(data) >= 4:
+                price, count, amount_raw = data[1], int(data[2]), data[3]
+            else:
+                price = None
+                count = 0
+                amount_raw = None
+
+            if price is not None:
+                amount = Decimal(str(amount_raw))
+                price_str = str(price)
+                amount_str = str(amount_raw)
+                count_str = str(count)
                 if count == 0:
                     if amount < 0:
-                        asks = [[str(price), "0"]]
+                        asks = [[price_str, count_str, "0"]]
                         bids = []
                     else:
-                        bids = [[str(price), "0"]]
+                        bids = [[price_str, count_str, "0"]]
                         asks = []
                 elif amount > 0:
-                    bids = [[str(price), str(amount)]]
+                    if amount_str.startswith("-"):
+                        amount_str = amount_str[1:]
+                    bids = [[price_str, count_str, amount_str]]
                     asks = []
                 else:
-                    asks = [[str(price), str(amount)]]
+                    if amount_str.startswith("-"):
+                        amount_str = amount_str[1:]
+                    asks = [[price_str, count_str, amount_str]]
                     bids = []
                 diffs.append(
                     DepthDiff(
@@ -143,18 +166,21 @@ class BitfinexAdapter(ExchangeAdapter):
                 return snapshots, diffs, trades
 
         if chan_id == self.trades_chan_id:
-            if len(data) >= 2 and data[1] == "hb":
+            if len(data) < 2:
                 return snapshots, diffs, trades
-            # Snapshot: [chanId, [ [seq|id, ts, price, amount], ... ]]
+            if data[1] == "hb":
+                return snapshots, diffs, trades
+            # Snapshot: [chanId, [ [trade_id, mts, amount, price], ... ]]
             if len(data) == 2 and isinstance(data[1], list):
                 for entry in data[1]:
                     if not isinstance(entry, list):
                         continue
                     if len(entry) == 4:
-                        seq, ts, price, amount = entry
-                        trade_id = int(seq)
+                        trade_id, ts, amount, price = entry
+                    elif len(entry) >= 5:
+                        trade_id, ts, amount, price = entry[0:4]
                     else:
-                        seq, trade_id, ts, price, amount = entry[0:5]
+                        continue
                     amount_val = float(amount)
                     trade_time_ms = _to_ms(ts)
                     trades.append(
@@ -165,30 +191,33 @@ class BitfinexAdapter(ExchangeAdapter):
                             price=float(price),
                             qty=abs(amount_val),
                             is_buyer_maker=0 if amount_val > 0 else 1,
+                            side="buy" if amount_val > 0 else "sell",
                             raw={"type": "snapshot", "entry": entry},
                         )
                     )
                 return snapshots, diffs, trades
 
-            # Updates: [chanId, 'te'|'tu', ...]
+            # Updates: [chanId, 'te'|'tu', trade_id, mts, amount, price]
             if len(data) >= 3 and data[1] in ("te", "tu"):
                 if data[1] != "tu":
                     return snapshots, diffs, trades
-                seq = data[2]
-                trade_id = data[3]
-                ts = data[4]
+                if len(data) < 6:
+                    return snapshots, diffs, trades
+                trade_id = data[2]
+                ts = data[3]
+                amount = data[4]
                 price = data[5]
-                amount = data[6]
                 amount_val = float(amount)
                 trade_time_ms = _to_ms(ts)
                 trades.append(
                     Trade(
                         event_time_ms=trade_time_ms,
-                        trade_id=int(trade_id) if trade_id is not None else int(seq),
+                        trade_id=int(trade_id) if trade_id is not None else 0,
                         trade_time_ms=trade_time_ms,
                         price=float(price),
                         qty=abs(amount_val),
                         is_buyer_maker=0 if amount_val > 0 else 1,
+                        side="buy" if amount_val > 0 else "sell",
                         raw={"type": data[1], "entry": data},
                     )
                 )
