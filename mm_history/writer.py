@@ -10,13 +10,13 @@ import json
 from mm_history.types import Candle, Trade
 
 
-def _open_gzip_text(path: Path):
+def _open_gzip_text(path: Path, mode: str = "wt"):
     path.parent.mkdir(parents=True, exist_ok=True)
-    return gzip.open(path, "at", encoding="utf-8")
+    return gzip.open(path, mode, encoding="utf-8")
 
 
 def write_candles_csv(path: Path, candles: Iterable[Candle]) -> None:
-    with _open_gzip_text(path) as fh:
+    with _open_gzip_text(path, mode="wt") as fh:
         writer = csv.DictWriter(
             fh,
             fieldnames=[
@@ -49,8 +49,7 @@ def write_candles_csv(path: Path, candles: Iterable[Candle]) -> None:
 
 
 def write_trades_ndjson(path: Path, trades: Iterable[Trade]) -> None:
-    with _open_gzip_text(path) as fh:
+    with _open_gzip_text(path, mode="wt") as fh:
         for trade in trades:
             payload = asdict(trade)
             fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
-
