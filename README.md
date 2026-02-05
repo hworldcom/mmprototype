@@ -21,6 +21,11 @@ for snapshots; if you later need signed endpoints or user streams, you can reint
 
 The repository includes tests that validate epochs, header handling, and recorder output contracts. Those tests run offline thanks to the client-creation guard in `recorder.py`.
 
+Recent additions:
+- `mm_history` for historical candle/trade extraction and local+exchange candle combining.
+- `mm_api` for a lightweight WS relay and minimal REST snapshot endpoint.
+- Rolling `live/` files for low-latency relay tailing.
+
 ## Output contract
 
 Each recorder run (one symbol per process) produces the following files under `data/<EXCHANGE>/<SYMBOL_FS>/<YYYYMMDD>/`:
@@ -33,6 +38,8 @@ Each recorder run (one symbol per process) produces the following files under `d
 - `snapshots/snapshot_<event_id>_<tag>.json` — raw snapshot payload (REST for Binance, WS for checksum exchanges).
 - `diffs/depth_diffs_<SYMBOL_FS>_<YYYYMMDD>.ndjson.gz` — optional compressed raw WS diffs for exact replays (checksum exchanges include a `checksum` field per diff).
 - `trades/trades_ws_raw_<SYMBOL_FS>_<YYYYMMDD>.ndjson.gz` — raw trade payloads with recv sequence metadata.
+- `live/live_depth_diffs.ndjson` — rolling uncompressed live diffs for WS relay (rotated + retained).
+- `live/live_trades.ndjson` — rolling uncompressed live trades for WS relay (rotated + retained).
 
 Uncompressed outputs are intentionally not supported. Avoid renaming columns or folders unless you also update downstream consumers.
 
@@ -81,6 +88,7 @@ Uncompressed outputs are intentionally not supported. Avoid renaming columns or 
 Note: raw JSON payloads may contain Decimal values serialized as strings to preserve precision for checksum verification.
 
 See `docs/sync_and_checksum.md` for detailed sync/checksum logic and known issues per exchange.
+See `docs/ws_relay.md` for the WebSocket relay that streams live data to a frontend.
 
 ## Recorder state machine
 
@@ -109,6 +117,28 @@ python -m mm_recorder.replay_validator --day-dir data/<EXCHANGE>/<SYMBOL_FS>/<YY
 ```
 
 It returns exit code `0` if no gaps are detected, and `1` if any gap/checksum mismatch is found.
+
+## Historical data utilities
+
+### Fetch candles/trades
+```bash
+EXCHANGE=binance SYMBOL=BTCUSDT TYPE=candles INTERVAL=1m START_MS=1709337600000 END_MS=1709341200000 \
+python -m mm_history.cli
+
+EXCHANGE=binance SYMBOL=BTCUSDT TYPE=trades START_MS=1709337600000 END_MS=1709341200000 \
+python -m mm_history.cli
+```
+
+### Combine local + exchange candles
+The combiner prefers local candles and logs an error if overlap candles differ from the exchange:
+```bash
+python -m mm_history.smoke
+```
+
+### Gap smoke test (local vs exchange)
+```bash
+python -m mm_history.smoke_gap
+```
 
 ## Tests
 
@@ -141,12 +171,29 @@ If you vendor this repo into another build context, ensure `mm_core` is present 
 | `WS_MAX_SESSION_S` | Max WS session duration before forced reconnect (seconds). |
 | `WS_OPEN_TIMEOUT_S` | WebSocket handshake/open timeout (seconds). |
 | `WS_NO_DATA_WARN_S` | Warn if no WS messages are received for this many seconds. |
+| `LIVE_STREAM` | Enable rolling uncompressed live files for WS relay (default: `1`). |
+| `LIVE_STREAM_ROTATE_S` | Rotate live files after this many seconds (default: `60`). |
+| `LIVE_STREAM_RETENTION_S` | Retain rotated live files for this many seconds (default: `3600`). |
 | `WINDOW_TZ` (env) | Timezone used for start/end windows (default: `Europe/Berlin`). |
 | `WINDOW_START_HHMM` (env) | Window start time in 24h `HH:MM` (default: `00:00`). |
 | `WINDOW_END_HHMM` (env) | Window end time in 24h `HH:MM` (default: `00:15`). |
 | `WINDOW_END_DAY_OFFSET` (env) | Day offset added to the end time (default: `1`). Use `1` for next-day cutoff. |
 | `HEARTBEAT_SEC`, `SYNC_WARN_AFTER_SEC`, `MAX_BUFFER_WARN` | Telemetry cadence and warning thresholds. |
 | `ORDERBOOK_BUFFER_ROWS`, `TRADES_BUFFER_ROWS`, `BUFFER_FLUSH_INTERVAL_SEC` | Tune throughput vs. fsync pressure. |
+
+## WebSocket relay + REST snapshot
+
+Start the live relay:
+```bash
+python -m mm_api.relay
+```
+
+Start the minimal REST snapshot endpoint:
+```bash
+python -m mm_api.rest
+```
+
+See `docs/ws_relay.md` for the full message format and connection details.
 
 ### Dependencies and testing notes
 

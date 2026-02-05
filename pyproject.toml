@@ -19,4 +19,4 @@ mm-recorder = "mm_recorder.recorder:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["mm_recorder*", "mm_core*"]
+include = ["mm_recorder*", "mm_core*", "mm_history*", "mm_api*"]

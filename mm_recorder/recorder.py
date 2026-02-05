@@ -22,6 +22,7 @@ from mm_recorder.logging_config import setup_logging
 from mm_recorder.ws_stream import BinanceWSStream
 from mm_recorder.snapshot import record_rest_snapshot, write_snapshot_csv, write_snapshot_json
 from mm_recorder.buffered_writer import BufferedCSVWriter, BufferedTextWriter, _is_empty_text_file
+from mm_recorder.live_writer import LiveNdjsonWriter
 from mm_recorder.exchanges import get_adapter
 from mm_recorder.exchanges.types import BookSnapshot, DepthDiff, Trade
 from mm_core.schema import write_schema, SCHEMA_VERSION
@@ -53,6 +54,9 @@ INSECURE_TLS = os.getenv("INSECURE_TLS", "0").strip() in ("1", "true", "True")
 
 # If True, write raw WS depth diffs for production-faithful replay
 STORE_DEPTH_DIFFS = True
+LIVE_STREAM_ENABLED = os.getenv("LIVE_STREAM", "1").strip() in ("1", "true", "True")
+LIVE_STREAM_ROTATE_S = float(os.getenv("LIVE_STREAM_ROTATE_S", "60"))
+LIVE_STREAM_RETENTION_S = float(os.getenv("LIVE_STREAM_RETENTION_S", str(60 * 60)))
 
 class RecorderPhase(str, Enum):
     CONNECTING = "connecting"
@@ -352,6 +356,20 @@ def run_recorder():
         flush_interval_s=BUFFER_FLUSH_INTERVAL_SEC,
         opener=lambda p: gzip.open(p, "at", encoding="utf-8"),
     )
+    live_diff_writer: LiveNdjsonWriter | None = None
+    live_trade_writer: LiveNdjsonWriter | None = None
+    if LIVE_STREAM_ENABLED:
+        live_dir = day_dir / "live"
+        live_diff_writer = LiveNdjsonWriter(
+            live_dir / "live_depth_diffs.ndjson",
+            rotate_interval_s=LIVE_STREAM_ROTATE_S,
+            retention_s=LIVE_STREAM_RETENTION_S,
+        )
+        live_trade_writer = LiveNdjsonWriter(
+            live_dir / "live_trades.ndjson",
+            rotate_interval_s=LIVE_STREAM_ROTATE_S,
+            retention_s=LIVE_STREAM_RETENTION_S,
+        )
 
     log.info("Day dir:         %s", day_dir)
     log.info("Orderbook out:   %s", ob_path)
@@ -360,6 +378,9 @@ def run_recorder():
     log.info("Events out:      %s", ev_path)
     if STORE_DEPTH_DIFFS:
         log.info("Diffs out:       %s", diff_path)
+    if LIVE_STREAM_ENABLED:
+        log.info("Live diffs out:  %s", live_dir / "live_depth_diffs.ndjson")
+        log.info("Live trades out: %s", live_dir / "live_trades.ndjson")
 
     engine = adapter.create_sync_engine(sub_depth)
 
@@ -654,6 +675,26 @@ def run_recorder():
                 diff_writer.write_line(json.dumps(minimal, ensure_ascii=False, default=str) + "\n")
             except Exception:
                 log.exception("Failed writing depth diffs")
+        if live_diff_writer is not None:
+            try:
+                minimal_live = {
+                    "recv_ms": recv_ms,
+                    "recv_seq": msg_recv_seq,
+                    "E": int(parsed.event_time_ms),
+                    "U": int(parsed.U),
+                    "u": int(parsed.u),
+                    "b": parsed.bids,
+                    "a": parsed.asks,
+                    "exchange": exchange,
+                    "symbol": symbol,
+                }
+                if parsed.checksum is not None:
+                    minimal_live["checksum"] = int(parsed.checksum)
+                if parsed.raw is not None:
+                    minimal_live["raw"] = parsed.raw
+                live_diff_writer.write_line(json.dumps(minimal_live, ensure_ascii=False, default=str) + "\n")
+            except Exception:
+                log.exception("Failed writing live depth diffs")
 
         # Stop at end of window.
         #
@@ -730,6 +771,7 @@ def run_recorder():
                 ]
             )
             state.tr_rows_written += 1
+            raw_payload = None
             if parsed.raw is not None:
                 raw_payload = {
                     "recv_ms": recv_ms,
@@ -741,6 +783,22 @@ def run_recorder():
                     "raw": parsed.raw,
                 }
                 tr_raw_writer.write_line(json.dumps(raw_payload, ensure_ascii=False, default=str) + "\n")
+            if live_trade_writer is not None:
+                try:
+                    live_payload = raw_payload if raw_payload is not None else {
+                        "recv_ms": recv_ms,
+                        "recv_seq": msg_recv_seq,
+                        "event_time_ms": int(parsed.event_time_ms),
+                        "trade_id": int(parsed.trade_id),
+                        "price": parsed.price,
+                        "qty": parsed.qty,
+                        "side": side,
+                        "exchange": exchange,
+                        "symbol": symbol,
+                    }
+                    live_trade_writer.write_line(json.dumps(live_payload, ensure_ascii=False, default=str) + "\n")
+                except Exception:
+                    log.exception("Failed writing live trades")
         except Exception:
             log.exception("Unhandled exception in on_trade (message=%s)", data)
         finally:
