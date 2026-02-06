@@ -195,6 +195,12 @@ python -m mm_api.rest
 
 See `docs/ws_relay.md` for the full message format and connection details.
 
+### WS clients (manual)
+```
+python ws_clients/relay_client.py
+python ws_clients/metrics_client.py
+```
+
 ### Dependencies and testing notes
 
 - `mm_recorder.logging_config` is used to configure per-run logging.

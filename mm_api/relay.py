@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -22,6 +23,8 @@ from mm_api.tailer import (
 
 
 POLL_INTERVAL_S = float(os.getenv("WS_RELAY_POLL_INTERVAL_S", "1.0"))
+LIVE_ONLY = os.getenv("WS_RELAY_LIVE_ONLY", "0").strip() in ("1", "true", "True")
+log = logging.getLogger("mm_api.relay")
 
 
 def _now_ms() -> int:
@@ -90,11 +93,15 @@ async def _stream_loop(
     diff_state = TailState()
     trade_state = TailState()
     event_state = TailState()
-    diff_path = paths.get("live_diffs") or paths.get("diffs")
-    trade_path = paths.get("live_trades") or paths.get("trades")
+    diff_path = paths.get("live_diffs") if LIVE_ONLY else (paths.get("live_diffs") or paths.get("diffs"))
+    trade_path = paths.get("live_trades") if LIVE_ONLY else (paths.get("live_trades") or paths.get("trades"))
     current_day_dir = paths.get("day_dir")
     if from_mode == "tail":
-        for path, state in ((diff_path, diff_state), (trade_path, trade_state), (paths.get("events"), event_state)):
+        for path, state in (
+            (diff_path, diff_state),
+            (trade_path, trade_state),
+            (None if LIVE_ONLY else paths.get("events"), event_state),
+        ):
             if path:
                 if path.suffix == ".gz":
                     state.line_index = count_gzip_lines(path)
@@ -109,13 +116,17 @@ async def _stream_loop(
         if latest_paths and latest_paths.get("day_dir") != current_day_dir:
             current_day_dir = latest_paths.get("day_dir")
             paths = latest_paths
-            diff_path = paths.get("live_diffs") or paths.get("diffs")
-            trade_path = paths.get("live_trades") or paths.get("trades")
+            diff_path = paths.get("live_diffs") if LIVE_ONLY else (paths.get("live_diffs") or paths.get("diffs"))
+            trade_path = paths.get("live_trades") if LIVE_ONLY else (paths.get("live_trades") or paths.get("trades"))
             diff_state = TailState()
             trade_state = TailState()
             event_state = TailState()
             if from_mode == "tail":
-                for path, state in ((diff_path, diff_state), (trade_path, trade_state), (paths.get("events"), event_state)):
+                for path, state in (
+                    (diff_path, diff_state),
+                    (trade_path, trade_state),
+                    (None if LIVE_ONLY else paths.get("events"), event_state),
+                ):
                     if path:
                         if path.suffix == ".gz":
                             state.line_index = count_gzip_lines(path)
@@ -154,7 +165,7 @@ async def _stream_loop(
                         data=payload,
                     ),
                 )
-        if paths.get("events"):
+        if (not LIVE_ONLY) and paths.get("events"):
             for payload in tail_csv(paths["events"], event_state):
                 await _send_json(
                     ws,
@@ -168,14 +179,23 @@ async def _stream_loop(
                 )
 
 
-async def _handler(ws: WebSocketServerProtocol, path: str) -> None:
-    params = _parse_query(path)
+def _get_path(ws: WebSocketServerProtocol) -> str:
+    req = getattr(ws, "request", None)
+    if req is not None and hasattr(req, "path"):
+        return req.path
+    return getattr(ws, "path", "")
+
+
+async def _handler(ws: WebSocketServerProtocol) -> None:
+    params = _parse_query(_get_path(ws))
     exchange = params.get("exchange", "binance")
     symbol = params.get("symbol")
     from_mode = params.get("from", "tail")
     if not symbol:
         await _send_status(ws, exchange, "", "symbol is required")
         return
+    log.info("Relay client connected exchange=%s symbol=%s from=%s", exchange, symbol, from_mode)
+    await _send_status(ws, exchange, symbol, "connected")
     try:
         await _stream_loop(ws, exchange, symbol, from_mode)
     except websockets.ConnectionClosed:
@@ -190,7 +210,11 @@ async def _run_server(host: str, port: int) -> None:
 def main() -> None:
     host = os.getenv("WS_RELAY_HOST", "0.0.0.0")
     port = int(os.getenv("WS_RELAY_PORT", "8765"))
-    print(f"WS relay listening on ws://{host}:{port}/ws")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s - %(message)s",
+    )
+    log.info("WS relay listening on ws://%s:%s/ws", host, port)
     asyncio.run(_run_server(host, port))
 
 

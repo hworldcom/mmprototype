@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import logging
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
@@ -54,8 +55,12 @@ class _Handler(BaseHTTPRequestHandler):
 def main() -> None:
     host = os.getenv("REST_HOST", "0.0.0.0")
     port = int(os.getenv("REST_PORT", "8080"))
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s - %(message)s",
+    )
     server = HTTPServer((host, port), _Handler)
-    print(f"REST API listening on http://{host}:{port}")
+    logging.getLogger("mm_api.rest").info("REST API listening on http://%s:%s", host, port)
     server.serve_forever()
 
 

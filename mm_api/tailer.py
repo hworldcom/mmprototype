@@ -29,8 +29,12 @@ def read_text_lines(path: Path) -> List[str]:
 def count_gzip_lines(path: Path) -> int:
     if not path.exists():
         return 0
-    with gzip.open(path, "rt", encoding="utf-8") as fh:
-        return sum(1 for _ in fh)
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as fh:
+            return sum(1 for _ in fh)
+    except EOFError:
+        # File may be mid-write; fall back to zero so we don't crash the relay.
+        return 0
 
 
 def count_text_lines(path: Path) -> int:
@@ -41,7 +45,10 @@ def count_text_lines(path: Path) -> int:
 
 
 def tail_ndjson(path: Path, state: TailState) -> List[Dict[str, Any]]:
-    lines = read_gzip_lines(path)
+    try:
+        lines = read_gzip_lines(path)
+    except EOFError:
+        return []
     if state.line_index >= len(lines):
         return []
     new_lines = lines[state.line_index :]
@@ -56,6 +63,9 @@ def tail_ndjson(path: Path, state: TailState) -> List[Dict[str, Any]]:
 
 def tail_text_ndjson(path: Path, state: TailState) -> List[Dict[str, Any]]:
     lines = read_text_lines(path)
+    if len(lines) < state.line_index:
+        # File rotated/truncated; reset to start.
+        state.line_index = 0
     if state.line_index >= len(lines):
         return []
     new_lines = lines[state.line_index :]
@@ -69,7 +79,10 @@ def tail_text_ndjson(path: Path, state: TailState) -> List[Dict[str, Any]]:
 
 
 def tail_csv(path: Path, state: TailState) -> List[Dict[str, Any]]:
-    lines = read_gzip_lines(path)
+    try:
+        lines = read_gzip_lines(path)
+    except EOFError:
+        return []
     if not lines:
         return []
     if state.line_index == 0:

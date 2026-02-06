@@ -61,10 +61,31 @@ Example:
 http://localhost:8080/snapshot?exchange=binance&symbol=BTCUSDT
 ```
 
+## Metrics WebSocket (server-computed)
+
+Start the metrics server:
+```
+python -m mm_api.metrics
+```
+
+Connect:
+```
+ws://localhost:8766/metrics?exchange=binance&symbols=BTCUSDC,ETHUSDC&interval=1m&window=180d&metric=correlation
+```
+
+Supported metrics:
+- `correlation` (two symbols)
+- `volatility` (one symbol)
+
+The server computes metrics on 1m candles and updates **every second** using partial candles built from live trades.
+
 ### Query parameters
 - `exchange` (required) — `binance`, `kraken`, `bitfinex`
 - `symbol` (required) — trading pair in exchange format (e.g., `BTCUSDT`, `BTC/USD`, `tBTCUSD`)
 - `from` (optional) — `tail` (default) or `start` to replay from file start
+
+### Environment flags
+- `WS_RELAY_LIVE_ONLY=1` to skip gzip events/fallbacks and only tail `live/` files.
 
 ## Message Format
 
