@@ -53,3 +53,28 @@ http://localhost:8080/snapshot?exchange=binance&symbol=BTCUSDC
   Reduce the window with `WINDOW=7d` or prefetch candles via `mm_history.cli`.
 - If live updates stop, ensure the recorder is still running and that the **latest day**
   folder is being tailed (e.g., `data/binance/BTCUSDC/<YYYYMMDD>/live/`).
+
+## What the client receives
+
+### Relay (`/ws`)
+The relay streams JSON messages with:
+- `type="snapshot"` — initial snapshot payload (if available)
+- `type="diff"` — order book diffs
+- `type="trade"` — raw trade payloads
+- `type="event"` — recorder events (unless `WS_RELAY_LIVE_ONLY=1`)
+- `type="spread"` — derived top-of-book spread:
+  - `bid`, `ask`, `mid`, `spread_abs`, `spread_bps`
+- `type="levels"` — top-N resting volume per level:
+  - `bids`, `asks`, `sum_bid_qty`, `sum_ask_qty`
+
+Message schema reference: `docs/ws_relay.md`.
+
+### Metrics (`/metrics`)
+The metrics server streams:
+- `type="metric"` with:
+  - `metric="correlation"` (two symbols) or `metric="volatility"` (one symbol)
+  - `value` (float)
+  - `interval`, `window_ms`
+
+It also sends an initial status message:
+- `metric="status"`, `value=1.0`

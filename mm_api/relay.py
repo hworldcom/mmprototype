@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import websockets
-from websockets.server import WebSocketServerProtocol
+from typing import Any
 
 from mm_api.protocols import make_message
 from mm_api.sources import resolve_latest_paths
@@ -24,7 +24,64 @@ from mm_api.tailer import (
 
 POLL_INTERVAL_S = float(os.getenv("WS_RELAY_POLL_INTERVAL_S", "1.0"))
 LIVE_ONLY = os.getenv("WS_RELAY_LIVE_ONLY", "0").strip() in ("1", "true", "True")
+LEVELS_N = int(os.getenv("WS_RELAY_LEVELS", "20"))
+LEVELS_INTERVAL_S = float(os.getenv("WS_RELAY_LEVELS_INTERVAL_S", "1.0"))
 log = logging.getLogger("mm_api.relay")
+
+
+class _TopOfBook:
+    def __init__(self) -> None:
+        self._bids: dict[float, float] = {}
+        self._asks: dict[float, float] = {}
+        self.best_bid: float | None = None
+        self.best_ask: float | None = None
+
+    def seed(self, bids: list, asks: list) -> None:
+        for price, qty in bids:
+            self._set_level(self._bids, price, qty, is_bid=True)
+        for price, qty in asks:
+            self._set_level(self._asks, price, qty, is_bid=False)
+        self._recompute_best()
+
+    def apply_updates(self, bids: list, asks: list) -> None:
+        for price, qty in bids:
+            self._set_level(self._bids, price, qty, is_bid=True)
+        for price, qty in asks:
+            self._set_level(self._asks, price, qty, is_bid=False)
+        self._adjust_best()
+
+    def _set_level(self, book: dict[float, float], price: str | float, qty: str | float, is_bid: bool) -> None:
+        p = float(price)
+        q = float(qty)
+        if q <= 0:
+            book.pop(p, None)
+            if is_bid and self.best_bid == p:
+                self.best_bid = None
+            if (not is_bid) and self.best_ask == p:
+                self.best_ask = None
+            return
+        book[p] = q
+        if is_bid:
+            if self.best_bid is None or p > self.best_bid:
+                self.best_bid = p
+        else:
+            if self.best_ask is None or p < self.best_ask:
+                self.best_ask = p
+
+    def _recompute_best(self) -> None:
+        self.best_bid = max(self._bids.keys()) if self._bids else None
+        self.best_ask = min(self._asks.keys()) if self._asks else None
+
+    def _adjust_best(self) -> None:
+        if self.best_bid is None and self._bids:
+            self.best_bid = max(self._bids.keys())
+        if self.best_ask is None and self._asks:
+            self.best_ask = min(self._asks.keys())
+
+    def top_levels(self, n: int) -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
+        bids = sorted(self._bids.items(), key=lambda x: x[0], reverse=True)[:n]
+        asks = sorted(self._asks.items(), key=lambda x: x[0])[:n]
+        return bids, asks
 
 
 def _now_ms() -> int:
@@ -39,11 +96,11 @@ def _parse_query(path: str) -> Dict[str, str]:
     return {k: v for k, v in items if len(k) > 0}
 
 
-async def _send_json(ws: WebSocketServerProtocol, payload: Dict[str, Any]) -> None:
+async def _send_json(ws: Any, payload: Dict[str, Any]) -> None:
     await ws.send(json.dumps(payload, ensure_ascii=False))
 
 
-async def _send_status(ws: WebSocketServerProtocol, exchange: str, symbol: str, message: str) -> None:
+async def _send_status(ws: Any, exchange: str, symbol: str, message: str) -> None:
     await _send_json(
         ws,
         make_message(
@@ -56,29 +113,35 @@ async def _send_status(ws: WebSocketServerProtocol, exchange: str, symbol: str, 
     )
 
 
-async def _send_snapshot(ws: WebSocketServerProtocol, exchange: str, symbol: str, path: Optional[str]) -> None:
+def _load_snapshot_data(path: Optional[str]) -> Optional[dict]:
     if not path:
-        await _send_status(ws, exchange, symbol, "snapshot not found")
-        return
+        return None
     try:
         with open(path, "r", encoding="utf-8") as fh:
             raw = json.load(fh)
-        await _send_json(
-            ws,
-            make_message(
-                msg_type="snapshot",
-                exchange=exchange,
-                symbol=symbol,
-                ts_ms=_now_ms(),
-                data=raw if isinstance(raw, dict) else {"raw": raw},
-            ),
-        )
-    except Exception as exc:
-        await _send_status(ws, exchange, symbol, f"snapshot read failed: {exc}")
+        return raw if isinstance(raw, dict) else {"raw": raw}
+    except Exception:
+        return None
+
+
+async def _send_snapshot(ws: Any, exchange: str, symbol: str, data: Optional[dict]) -> None:
+    if data is None:
+        await _send_status(ws, exchange, symbol, "snapshot not found")
+        return
+    await _send_json(
+        ws,
+        make_message(
+            msg_type="snapshot",
+            exchange=exchange,
+            symbol=symbol,
+            ts_ms=_now_ms(),
+            data=data,
+        ),
+    )
 
 
 async def _stream_loop(
-    ws: WebSocketServerProtocol,
+    ws: Any,
     exchange: str,
     symbol: str,
     from_mode: str,
@@ -88,11 +151,20 @@ async def _stream_loop(
         await _send_status(ws, exchange, symbol, "no data directory found")
         return
 
-    await _send_snapshot(ws, exchange, symbol, str(paths.get("snapshot")) if paths.get("snapshot") else None)
+    snapshot_data = _load_snapshot_data(str(paths.get("snapshot")) if paths.get("snapshot") else None)
+    await _send_snapshot(ws, exchange, symbol, snapshot_data)
 
     diff_state = TailState()
     trade_state = TailState()
     event_state = TailState()
+    book = _TopOfBook()
+    last_best = (None, None)
+    last_levels_emit = 0.0
+    if snapshot_data:
+        bids = snapshot_data.get("bids") or snapshot_data.get("b") or []
+        asks = snapshot_data.get("asks") or snapshot_data.get("a") or []
+        if bids or asks:
+            book.seed(bids, asks)
     diff_path = paths.get("live_diffs") if LIVE_ONLY else (paths.get("live_diffs") or paths.get("diffs"))
     trade_path = paths.get("live_trades") if LIVE_ONLY else (paths.get("live_trades") or paths.get("trades"))
     current_day_dir = paths.get("day_dir")
@@ -142,6 +214,32 @@ async def _stream_loop(
         if diff_path:
             tailer = tail_ndjson if diff_path.suffix == ".gz" else tail_text_ndjson
             for payload in tailer(diff_path, diff_state):
+                bids = payload.get("b") or []
+                asks = payload.get("a") or []
+                if bids or asks:
+                    book.apply_updates(bids, asks)
+                    if book.best_bid is not None and book.best_ask is not None:
+                        if (book.best_bid, book.best_ask) != last_best:
+                            mid = (book.best_bid + book.best_ask) / 2
+                            spread_abs = book.best_ask - book.best_bid
+                            spread_bps = (spread_abs / mid) * 10_000 if mid > 0 else 0.0
+                            await _send_json(
+                                ws,
+                                make_message(
+                                    msg_type="spread",
+                                    exchange=exchange,
+                                    symbol=symbol,
+                                    ts_ms=int(payload.get("E") or payload.get("recv_ms") or _now_ms()),
+                                    data={
+                                        "bid": book.best_bid,
+                                        "ask": book.best_ask,
+                                        "mid": mid,
+                                        "spread_abs": spread_abs,
+                                        "spread_bps": spread_bps,
+                                    },
+                                ),
+                            )
+                            last_best = (book.best_bid, book.best_ask)
                 await _send_json(
                     ws,
                     make_message(
@@ -152,6 +250,29 @@ async def _stream_loop(
                         data=payload,
                     ),
                 )
+        now_s = time.time()
+        if now_s - last_levels_emit >= LEVELS_INTERVAL_S:
+            bids, asks = book.top_levels(LEVELS_N)
+            if bids or asks:
+                sum_bid = sum(q for _, q in bids)
+                sum_ask = sum(q for _, q in asks)
+                await _send_json(
+                    ws,
+                    make_message(
+                        msg_type="levels",
+                        exchange=exchange,
+                        symbol=symbol,
+                        ts_ms=_now_ms(),
+                        data={
+                            "levels": LEVELS_N,
+                            "bids": bids,
+                            "asks": asks,
+                            "sum_bid_qty": sum_bid,
+                            "sum_ask_qty": sum_ask,
+                        },
+                    ),
+                )
+            last_levels_emit = now_s
         if trade_path:
             tailer = tail_ndjson if trade_path.suffix == ".gz" else tail_text_ndjson
             for payload in tailer(trade_path, trade_state):
@@ -179,14 +300,14 @@ async def _stream_loop(
                 )
 
 
-def _get_path(ws: WebSocketServerProtocol) -> str:
+def _get_path(ws: Any) -> str:
     req = getattr(ws, "request", None)
     if req is not None and hasattr(req, "path"):
         return req.path
     return getattr(ws, "path", "")
 
 
-async def _handler(ws: WebSocketServerProtocol) -> None:
+async def _handler(ws: Any) -> None:
     params = _parse_query(_get_path(ws))
     exchange = params.get("exchange", "binance")
     symbol = params.get("symbol")

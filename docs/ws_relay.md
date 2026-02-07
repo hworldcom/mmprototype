@@ -173,6 +173,44 @@ Forwarded from `events_*.csv.gz`:
 }
 ```
 
+### `spread`
+Top-of-book spread derived from diffs:
+
+```
+{
+  "type": "spread",
+  "exchange": "binance",
+  "symbol": "BTCUSDT",
+  "ts_ms": 1700000000123,
+  "data": {
+    "bid": 50000.0,
+    "ask": 50001.0,
+    "mid": 50000.5,
+    "spread_abs": 1.0,
+    "spread_bps": 0.2
+  }
+}
+```
+
+### `levels`
+Top-N resting volumes per level (emitted every second by default):
+
+```
+{
+  "type": "levels",
+  "exchange": "binance",
+  "symbol": "BTCUSDT",
+  "ts_ms": 1700000000123,
+  "data": {
+    "levels": 20,
+    "bids": [[50000.0, 1.2], [49999.5, 0.8]],
+    "asks": [[50001.0, 0.9], [50001.5, 1.1]],
+    "sum_bid_qty": 2.0,
+    "sum_ask_qty": 2.0
+  }
+}
+```
+
 ### `status`
 Server-side status updates (optional):
 
@@ -195,3 +233,9 @@ Server-side status updates (optional):
   TODO: replace with incremental gzip tailing / stream offsets.
 - If `live/` files exist (e.g. `live_depth_diffs.ndjson`), the relay prefers them over `.ndjson.gz`.
 - If a file is missing (e.g., `diffs` disabled), the relay sends `status` and continues with available streams.
+
+## Long-term considerations
+- **Transport**: move from JSON to a compact format (e.g., Protobuf/MsgPack) for bandwidth and CPU savings.
+- **Architecture**: replace file tailing with a message bus (Redis/NATS/Kafka) to avoid rotation issues.
+- **Aggregation**: stream derived summaries (spread, top-of-book, depth totals) instead of full top-N levels at high frequency.
+- **Throttling**: tune level snapshots with `WS_RELAY_LEVELS_INTERVAL_S` or provide on-demand snapshots.
