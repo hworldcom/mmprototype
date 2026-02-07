@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Iterable, List, Optional
 
+import logging
 import requests
 
 from mm_history.exchanges.base import HistoricalClient
@@ -17,6 +18,7 @@ _AGGTRADES_PATH = "/api/v3/aggTrades"
 
 class BinanceHistoricalClient(HistoricalClient):
     name = "binance"
+    _log = logging.getLogger("mm_history.binance")
 
     def supports_interval(self, interval: str) -> bool:
         return interval in {
@@ -64,6 +66,7 @@ class BinanceHistoricalClient(HistoricalClient):
             "endTime": end_ms,
             "limit": limit,
         }
+        self._log.info("Fetch candles %s %s start=%s end=%s limit=%s", symbol, interval, start_ms, end_ms, limit)
         resp = requests.get(f"{_BINANCE_REST}{_KLINES_PATH}", params=params, timeout=30)
         resp.raise_for_status()
         payload: List[list] = resp.json()
@@ -108,6 +111,7 @@ class BinanceHistoricalClient(HistoricalClient):
             "endTime": end_ms,
             "limit": limit,
         }
+        self._log.info("Fetch aggTrades %s start=%s end=%s limit=%s", symbol, start_ms, end_ms, limit)
         resp = requests.get(f"{_BINANCE_REST}{_AGGTRADES_PATH}", params=params, timeout=30)
         resp.raise_for_status()
         payload: List[dict] = resp.json()

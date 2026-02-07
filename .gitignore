@@ -9,3 +9,5 @@ build/
 data/
 logs/
 out/
+.DS_Store
+tests/.DS_Store
