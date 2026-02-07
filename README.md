@@ -194,6 +194,7 @@ python -m mm_api.rest
 ```
 
 See `docs/ws_relay.md` for the full message format and connection details.
+See `docs/local_client_setup.md` for local client setup and example commands.
 
 ### WS clients (manual)
 ```
