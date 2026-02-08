@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -26,6 +27,8 @@ POLL_INTERVAL_S = float(os.getenv("WS_RELAY_POLL_INTERVAL_S", "1.0"))
 LIVE_ONLY = os.getenv("WS_RELAY_LIVE_ONLY", "0").strip() in ("1", "true", "True")
 LEVELS_N = int(os.getenv("WS_RELAY_LEVELS", "20"))
 LEVELS_INTERVAL_S = float(os.getenv("WS_RELAY_LEVELS_INTERVAL_S", "1.0"))
+VOLUME_WINDOW_S = int(os.getenv("WS_RELAY_VOLUME_WINDOW_S", str(24 * 60 * 60)))
+VOLUME_INTERVAL_S = float(os.getenv("WS_RELAY_VOLUME_INTERVAL_S", "1.0"))
 log = logging.getLogger("mm_api.relay")
 
 
@@ -82,6 +85,42 @@ class _TopOfBook:
         bids = sorted(self._bids.items(), key=lambda x: x[0], reverse=True)[:n]
         asks = sorted(self._asks.items(), key=lambda x: x[0])[:n]
         return bids, asks
+
+
+class _RollingVolume:
+    def __init__(self, window_s: int) -> None:
+        self.window_s = window_s
+        self._buckets: dict[int, dict[str, float]] = {}
+        self._total_buy = 0.0
+        self._total_sell = 0.0
+
+    def add(self, ts_ms: int, qty: float, side: str | None) -> None:
+        sec = int(ts_ms // 1000)
+        bucket = self._buckets.get(sec)
+        if bucket is None:
+            bucket = {"buy": 0.0, "sell": 0.0}
+            self._buckets[sec] = bucket
+        if side == "buy":
+            bucket["buy"] += qty
+            self._total_buy += qty
+        elif side == "sell":
+            bucket["sell"] += qty
+            self._total_sell += qty
+        else:
+            # Unknown side, treat as total volume only (ignored for buy/sell split).
+            pass
+        self._evict(sec)
+
+    def _evict(self, now_sec: int) -> None:
+        cutoff = now_sec - self.window_s + 1
+        to_delete = [sec for sec in self._buckets.keys() if sec < cutoff]
+        for sec in to_delete:
+            bucket = self._buckets.pop(sec)
+            self._total_buy -= bucket["buy"]
+            self._total_sell -= bucket["sell"]
+
+    def totals(self) -> tuple[float, float]:
+        return self._total_buy, self._total_sell
 
 
 def _now_ms() -> int:
@@ -160,6 +199,8 @@ async def _stream_loop(
     book = _TopOfBook()
     last_best = (None, None)
     last_levels_emit = 0.0
+    last_volume_emit = 0.0
+    volume = _RollingVolume(VOLUME_WINDOW_S)
     if snapshot_data:
         bids = snapshot_data.get("bids") or snapshot_data.get("b") or []
         asks = snapshot_data.get("asks") or snapshot_data.get("a") or []
@@ -276,6 +317,14 @@ async def _stream_loop(
         if trade_path:
             tailer = tail_ndjson if trade_path.suffix == ".gz" else tail_text_ndjson
             for payload in tailer(trade_path, trade_state):
+                side = payload.get("side")
+                qty = payload.get("qty")
+                ts_ms = payload.get("event_time_ms") or payload.get("recv_ms")
+                if qty is not None and ts_ms is not None:
+                    try:
+                        volume.add(int(ts_ms), float(qty), side)
+                    except Exception:
+                        log.exception("Failed to update rolling volume")
                 await _send_json(
                     ws,
                     make_message(
@@ -286,6 +335,26 @@ async def _stream_loop(
                         data=payload,
                     ),
                 )
+        now_s = time.time()
+        if now_s - last_volume_emit >= VOLUME_INTERVAL_S:
+            buy_vol, sell_vol = volume.totals()
+            total_vol = buy_vol + sell_vol
+            await _send_json(
+                ws,
+                make_message(
+                    msg_type="volume_24h",
+                    exchange=exchange,
+                    symbol=symbol,
+                    ts_ms=_now_ms(),
+                    data={
+                        "window_s": VOLUME_WINDOW_S,
+                        "buy_volume": buy_vol,
+                        "sell_volume": sell_vol,
+                        "total_volume": total_vol,
+                    },
+                ),
+            )
+            last_volume_emit = now_s
         if (not LIVE_ONLY) and paths.get("events"):
             for payload in tail_csv(paths["events"], event_state):
                 await _send_json(

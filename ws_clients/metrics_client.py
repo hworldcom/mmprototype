@@ -16,6 +16,9 @@ def _env(name: str, default: Optional[str] = None) -> str:
 
 
 async def main() -> None:
+    # Usage:
+    # SYMBOLS=BTCUSDC,ETHUSDC WINDOW=30d python ws_clients/metrics_client.py
+    # METRICS_HOST=localhost METRICS_PORT=8766 EXCHANGE=binance INTERVAL=1m METRIC=correlation python ws_clients/metrics_client.py
     host = os.getenv("METRICS_HOST", "localhost")
     port = os.getenv("METRICS_PORT", "8766")
     exchange = os.getenv("EXCHANGE", "binance")

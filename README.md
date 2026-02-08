@@ -156,6 +156,28 @@ docker run --rm \
   mm-recorder
 ```
 
+### Docker Compose (multi-service)
+
+`docker-compose.yml` starts:
+- 4 Binance recorders: BTCUSDC, ETHUSDC, SOLUSDC, XRPUSDC
+- WS relay (port 8765)
+- Metrics WS (port 8766)
+
+Run:
+```bash
+docker compose up --build
+```
+
+Detached:
+```bash
+docker compose up --build -d
+```
+
+Stop:
+```bash
+docker compose down
+```
+
 If you vendor this repo into another build context, ensure `mm_core` is present alongside `mm_recorder`.
 
 ### Configuration knobs
@@ -195,6 +217,19 @@ python -m mm_api.rest
 
 See `docs/ws_relay.md` for the full message format and connection details.
 See `docs/local_client_setup.md` for local client setup and example commands.
+See `docs/client_connection_guide.md` for a client-facing connection guide.
+
+### Connect to streamers (quick)
+
+Relay WS:
+```
+ws://localhost:8765/ws?exchange=binance&symbol=BTCUSDC
+```
+
+Metrics WS:
+```
+ws://localhost:8766/metrics?exchange=binance&symbols=BTCUSDC,ETHUSDC&interval=1m&window=30d&metric=correlation
+```
 
 ### WS clients (manual)
 ```

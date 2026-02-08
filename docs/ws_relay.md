@@ -79,13 +79,26 @@ Supported metrics:
 
 The server computes metrics on 1m candles and updates **every second** using partial candles built from live trades.
 
+Defaults:
+- `METRICS_POLL_INTERVAL_S=1.0`
+- `METRICS_CACHE_HISTORY=1` (auto-cache enabled)
+
 ### Query parameters
 - `exchange` (required) — `binance`, `kraken`, `bitfinex`
-- `symbol` (required) — trading pair in exchange format (e.g., `BTCUSDT`, `BTC/USD`, `tBTCUSD`)
-- `from` (optional) — `tail` (default) or `start` to replay from file start
+- `symbols` (required) — comma-separated list (e.g., `BTCUSDC,ETHUSDC`)
+- `interval` (optional) — defaults to `1m`
+- `window` (optional) — supports `s`, `m`, `h`, `d` (e.g., `1h`, `24h`, `7d`, `30d`, `180d`)
+- `metric` (optional) — `correlation` or `volatility`
 
 ### Environment flags
 - `WS_RELAY_LIVE_ONLY=1` to skip gzip events/fallbacks and only tail `live/` files.
+
+Default relay settings:
+- `WS_RELAY_POLL_INTERVAL_S=1.0`
+- `WS_RELAY_LEVELS=20`
+- `WS_RELAY_LEVELS_INTERVAL_S=1.0`
+- `WS_RELAY_VOLUME_WINDOW_S=86400` (24h)
+- `WS_RELAY_VOLUME_INTERVAL_S=1.0`
 
 ## Message Format
 
@@ -207,6 +220,24 @@ Top-N resting volumes per level (emitted every second by default):
     "asks": [[50001.0, 0.9], [50001.5, 1.1]],
     "sum_bid_qty": 2.0,
     "sum_ask_qty": 2.0
+  }
+}
+```
+
+### `volume_24h`
+Rolling 24h traded volume, updated every second:
+
+```
+{
+  "type": "volume_24h",
+  "exchange": "binance",
+  "symbol": "BTCUSDT",
+  "ts_ms": 1700000000123,
+  "data": {
+    "window_s": 86400,
+    "buy_volume": 123.45,
+    "sell_volume": 120.10,
+    "total_volume": 243.55
   }
 }
 ```

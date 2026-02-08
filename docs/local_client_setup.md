@@ -20,6 +20,11 @@ WS_RELAY_LIVE_ONLY=1
 python -m mm_api.relay
 ```
 
+Or with Docker Compose:
+```bash
+docker compose up --build -d
+```
+
 Connect a local relay client:
 ```bash
 SYMBOL=BTCUSDC python ws_clients/relay_client.py
@@ -54,6 +59,20 @@ http://localhost:8080/snapshot?exchange=binance&symbol=BTCUSDC
 - If live updates stop, ensure the recorder is still running and that the **latest day**
   folder is being tailed (e.g., `data/binance/BTCUSDC/<YYYYMMDD>/live/`).
 
+## Default streamer settings
+
+### Relay
+- `WS_RELAY_POLL_INTERVAL_S=1.0` — relay poll loop cadence.
+- `WS_RELAY_LEVELS=20` — number of book levels for `type="levels"`.
+- `WS_RELAY_LEVELS_INTERVAL_S=1.0` — emit `levels` every N seconds.
+- `WS_RELAY_LIVE_ONLY=0` — when set to `1`, skip gzip fallbacks and tail only `live/` files.
+- `WS_RELAY_VOLUME_WINDOW_S=86400` — rolling window for `volume_24h` (seconds).
+- `WS_RELAY_VOLUME_INTERVAL_S=1.0` — emit `volume_24h` every N seconds.
+
+### Metrics
+- `METRICS_POLL_INTERVAL_S=1.0` — metrics update cadence.
+- `METRICS_CACHE_HISTORY=1` — cache fetched history to `data/.../history/`.
+
 ## What the client receives
 
 ### Relay (`/ws`)
@@ -66,6 +85,8 @@ The relay streams JSON messages with:
   - `bid`, `ask`, `mid`, `spread_abs`, `spread_bps`
 - `type="levels"` — top-N resting volume per level:
   - `bids`, `asks`, `sum_bid_qty`, `sum_ask_qty`
+- `type="volume_24h"` — rolling traded volume:
+  - `buy_volume`, `sell_volume`, `total_volume`
 
 Message schema reference: `docs/ws_relay.md`.
 

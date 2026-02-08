@@ -16,6 +16,9 @@ def _env(name: str, default: Optional[str] = None) -> str:
 
 
 async def main() -> None:
+    # Usage:
+    # SYMBOL=BTCUSDC python ws_clients/relay_client.py
+    # RELAY_HOST=localhost RELAY_PORT=8765 EXCHANGE=binance FROM=tail python ws_clients/relay_client.py
     host = os.getenv("RELAY_HOST", "localhost")
     port = os.getenv("RELAY_PORT", "8765")
     exchange = os.getenv("EXCHANGE", "binance")

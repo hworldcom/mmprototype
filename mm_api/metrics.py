@@ -21,7 +21,7 @@ from mm_history.exchanges.binance import BinanceHistoricalClient
 
 
 POLL_INTERVAL_S = float(os.getenv("METRICS_POLL_INTERVAL_S", "1.0"))
-METRICS_CACHE_HISTORY = os.getenv("METRICS_CACHE_HISTORY", "0").strip() in ("1", "true", "True")
+METRICS_CACHE_HISTORY = os.getenv("METRICS_CACHE_HISTORY", "1").strip() in ("1", "true", "True")
 log = logging.getLogger("mm_api.metrics")
 
 
