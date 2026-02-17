@@ -62,35 +62,38 @@ class OrderBookSyncEngine:
                 return SyncResult("gap", f"bridge_impossible min_U={min_U} lastUpdateId={lu}")
 
         bridged = False
+        new_buffer: List[dict] = []
 
-        for ev in list(self.buffer):
+        for ev in self.buffer:
             U, u = int(ev["U"]), int(ev["u"])
 
             if u <= lu:
-                self.buffer.remove(ev)
                 continue
 
             if not self.depth_synced:
                 bridges = (U <= lu <= u) or (U <= lu + 1 <= u) # TODO: having two checks for bridges redundant, do we need or?
                 if not bridges:
+                    new_buffer.append(ev)
                     continue
 
                 ok = self.lob.apply_diff(U, u, ev.get("b", []), ev.get("a", []))
                 if not ok:
+                    self.buffer = new_buffer
                     return SyncResult("gap", f"bridge_apply_failed U={U} u={u} lastUpdateId={lu}")
 
                 self.depth_synced = True
                 bridged = True
                 lu = int(self.lob.last_update_id)
-                self.buffer.remove(ev)
                 continue
 
             ok = self.lob.apply_diff(U, u, ev.get("b", []), ev.get("a", []))
             if not ok:
+                self.buffer = new_buffer
                 return SyncResult("gap", f"gap U={U} u={u} last={self.lob.last_update_id}")
 
             lu = int(self.lob.last_update_id)
-            self.buffer.remove(ev)
+
+        self.buffer = new_buffer
 
         if self.depth_synced:
             action = "synced" if bridged else "applied"
