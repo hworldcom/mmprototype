@@ -10,6 +10,7 @@ from typing import Dict, Iterable, Iterator, List, Sequence, Tuple
 from mm_history.exchanges.base import HistoricalClient
 
 from mm_history.types import Candle
+from mm_core.symbols import symbol_fs as symbol_fs_fn
 
 log = logging.getLogger(__name__)
 
@@ -179,7 +180,7 @@ def combine_from_sources(
     end_bucket = bucket_start(end_ms - 1, interval) + interval_ms(interval)
 
     symbol_norm = client.normalize_symbol(symbol)
-    symbol_fs = symbol_norm.replace("/", "").replace("-", "").replace(":", "").replace(" ", "")
+    symbol_fs = symbol_fs_fn(symbol_norm)
     local_candles = list(
         _load_local_candles(
             data_root=data_root,

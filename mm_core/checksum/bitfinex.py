@@ -137,7 +137,7 @@ class BitfinexSyncEngine:
     buffer: List[DepthDiff] = None
     last_checksum_payload: Optional[str] = None
 
-    def __init__(self, depth: int) -> None:
+    def __init__(self, depth: int, max_buffer_size: int = 200_000) -> None:
         self.depth = int(depth)
         self.book = BitfinexBook(self.depth)
         self.lob = LocalOrderBook()
@@ -146,6 +146,7 @@ class BitfinexSyncEngine:
         self.buffer = []
         self.last_recv_seq: Optional[int] = None
         self.last_checksum_payload = None
+        self.max_buffer_size = int(max_buffer_size) if max_buffer_size is not None else None
 
     def adopt_snapshot(self, snapshot: BookSnapshot) -> None:
         self.book.load_snapshot(snapshot.bids, snapshot.asks)
@@ -171,6 +172,9 @@ class BitfinexSyncEngine:
     def feed_depth_event(self, ev: DepthDiff) -> SyncResult:
         if not self.snapshot_loaded:
             self.buffer.append(ev)
+            if self.max_buffer_size and len(self.buffer) > self.max_buffer_size:
+                self.buffer.clear()
+                return SyncResult("gap", "buffer_overflow")
             return SyncResult("buffered", "no_snapshot")
 
         raw = ev.raw or {}

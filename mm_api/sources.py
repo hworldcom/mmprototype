@@ -4,10 +4,7 @@ from pathlib import Path
 import re
 from typing import Optional
 
-
-def _symbol_fs(symbol: str) -> str:
-    return symbol.replace("/", "").replace("-", "").replace(":", "").replace(" ", "").upper()
-
+from mm_core.symbols import symbol_fs as symbol_fs_fn
 
 def _latest_day_dir(root: Path) -> Optional[Path]:
     if not root.exists():
@@ -39,7 +36,7 @@ def sanitize_symbol(symbol: str) -> str:
 def resolve_latest_paths(exchange: str, symbol: str) -> dict:
     exchange = sanitize_exchange(exchange)
     symbol = sanitize_symbol(symbol)
-    symbol_fs = _symbol_fs(symbol)
+    symbol_fs = symbol_fs_fn(symbol, upper=True)
     if not symbol_fs or symbol_fs in {".", ".."}:
         raise ValueError("invalid symbol")
     base = Path("data") / exchange / symbol_fs

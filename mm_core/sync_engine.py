@@ -25,13 +25,14 @@ class OrderBookSyncEngine:
       - detect gaps; additionally detect 'bridge impossible' (min_U > lastUpdateId+1)
     """
 
-    def __init__(self, lob: Optional[LocalOrderBook] = None):
+    def __init__(self, lob: Optional[LocalOrderBook] = None, max_buffer_size: int = 200_000):
         self.lob = lob or LocalOrderBook()
         self.snapshot_loaded: bool = False
         self.depth_synced: bool = False
         self.buffer: List[dict] = []
         # Updated by replay/recorder to carry global ordering through callbacks.
         self.last_recv_seq: Optional[int] = None
+        self.max_buffer_size = int(max_buffer_size) if max_buffer_size is not None else None
 
     def adopt_snapshot(self, lob: LocalOrderBook) -> None:
         """Adopt a fully-loaded snapshot book. Resets sync state but keeps buffered events."""
@@ -71,7 +72,8 @@ class OrderBookSyncEngine:
                 continue
 
             if not self.depth_synced:
-                bridges = (U <= lu <= u) or (U <= lu + 1 <= u) # TODO: having two checks for bridges redundant, do we need or?
+                # Binance bridge condition: U <= lastUpdateId+1 <= u
+                bridges = U <= lu + 1 <= u
                 if not bridges:
                     new_buffer.append(ev)
                     continue
@@ -105,10 +107,16 @@ class OrderBookSyncEngine:
         """Feed one WS depth-diff event."""
         if not self.snapshot_loaded:
             self.buffer.append(ev)
+            if self.max_buffer_size and len(self.buffer) > self.max_buffer_size:
+                self.buffer.clear()
+                return SyncResult("gap", "buffer_overflow")
             return SyncResult("buffered", "no_snapshot")
 
         if not self.depth_synced:
             self.buffer.append(ev)
+            if self.max_buffer_size and len(self.buffer) > self.max_buffer_size:
+                self.buffer.clear()
+                return SyncResult("gap", "buffer_overflow")
             return self._try_initial_sync()
 
         U, u = int(ev["U"]), int(ev["u"])

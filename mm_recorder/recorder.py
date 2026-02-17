@@ -3,14 +3,11 @@
 import os
 import csv
 import time
-import json
 import gzip
 import logging
-from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-from enum import Enum
 
 """Market data recorder.
 
@@ -20,78 +17,42 @@ Note: The project supports running unit tests in minimal environments where
 
 from mm_recorder.logging_config import setup_logging
 from mm_recorder.ws_stream import BinanceWSStream
-from mm_recorder.snapshot import record_rest_snapshot, write_snapshot_csv, write_snapshot_json, make_rest_client
+from mm_recorder.snapshot import make_rest_client, record_rest_snapshot
 from mm_recorder.buffered_writer import BufferedCSVWriter, BufferedTextWriter, _is_empty_text_file
 from mm_recorder.live_writer import LiveNdjsonWriter
 from mm_recorder.exchanges import get_adapter
-from mm_recorder.exchanges.types import BookSnapshot, DepthDiff, Trade
 from mm_core.schema import write_schema, SCHEMA_VERSION
+from mm_core.symbols import symbol_fs as symbol_fs_fn
+from mm_recorder.recorder_callbacks import RecorderCallbacks
+from mm_recorder.recorder_context import RecorderContext
+from mm_recorder.recorder_settings import (
+    DECIMALS,
+    DEPTH_LEVELS,
+    HEARTBEAT_SEC,
+    MAX_BUFFER_WARN,
+    SNAPSHOT_LIMIT,
+    ORDERBOOK_BUFFER_ROWS,
+    TRADES_BUFFER_ROWS,
+    BUFFER_FLUSH_INTERVAL_SEC,
+    WS_PING_INTERVAL_S,
+    WS_PING_TIMEOUT_S,
+    WS_RECONNECT_BACKOFF_S,
+    WS_RECONNECT_BACKOFF_MAX_S,
+    WS_MAX_SESSION_S,
+    WS_OPEN_TIMEOUT_S,
+    WS_NO_DATA_WARN_S,
+    INSECURE_TLS,
+    STORE_DEPTH_DIFFS,
+    LIVE_STREAM_ENABLED,
+    LIVE_STREAM_ROTATE_S,
+    LIVE_STREAM_RETENTION_S,
+    SYNC_WARN_AFTER_SEC,
+)
+from mm_recorder.recorder_types import RecorderPhase, RecorderState
 
 ORIGINAL_RECORD_REST_SNAPSHOT = record_rest_snapshot
 
-DECIMALS = 8
-DEPTH_LEVELS = 20
-
-HEARTBEAT_SEC = 30
-SYNC_WARN_AFTER_SEC = 10
-MAX_BUFFER_WARN = 5000
-SNAPSHOT_LIMIT = 1000
-ORDERBOOK_BUFFER_ROWS = 500
-TRADES_BUFFER_ROWS = 1000
-BUFFER_FLUSH_INTERVAL_SEC = 1.0
-
-def _env_int(name: str, default: int) -> int:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        return default
-
-
-def _env_float(name: str, default: float) -> float:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        return float(raw)
-    except ValueError:
-        return default
-
-
-def _env_bool(name: str, default: bool = False) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in ("1", "true", "yes", "y")
-
-
-# WS keepalive/reconnect
-WS_PING_INTERVAL_S = _env_int("WS_PING_INTERVAL_S", 20)
-WS_PING_TIMEOUT_S = _env_int("WS_PING_TIMEOUT_S", 60)
-WS_RECONNECT_BACKOFF_S = _env_float("WS_RECONNECT_BACKOFF_S", 1.0)
-WS_RECONNECT_BACKOFF_MAX_S = _env_float("WS_RECONNECT_BACKOFF_MAX_S", 30.0)
-WS_MAX_SESSION_S = _env_float("WS_MAX_SESSION_S", float(23 * 3600 + 50 * 60))
-WS_OPEN_TIMEOUT_S = _env_float("WS_OPEN_TIMEOUT_S", 10.0)
-WS_NO_DATA_WARN_S = _env_float("WS_NO_DATA_WARN_S", 10.0)
-
-# TLS verification should remain enabled by default.
-INSECURE_TLS = _env_bool("INSECURE_TLS", False)
-
-# If True, write raw WS depth diffs for production-faithful replay
-STORE_DEPTH_DIFFS = True
-LIVE_STREAM_ENABLED = _env_bool("LIVE_STREAM", True)
-LIVE_STREAM_ROTATE_S = _env_float("LIVE_STREAM_ROTATE_S", 60.0)
-LIVE_STREAM_RETENTION_S = _env_float("LIVE_STREAM_RETENTION_S", float(60 * 60))
-
-class RecorderPhase(str, Enum):
-    CONNECTING = "connecting"
-    SNAPSHOT = "snapshot"
-    SYNCING = "syncing"
-    SYNCED = "synced"
-    RESYNCING = "resyncing"
-    STOPPED = "stopped"
+ 
 
 def window_now():
     """Current wall-clock time in the configured recording timezone.
@@ -102,32 +63,6 @@ def window_now():
     """
     tz = os.getenv("WINDOW_TZ", "Europe/Berlin")
     return datetime.now(ZoneInfo(tz))
-
-
-@dataclass
-class RecorderState:
-    recv_seq: int = 0
-    event_id: int = 0
-    epoch_id: int = 0
-    resync_count: int = 0
-    ws_open_count: int = 0
-    window_end_emitted: bool = False
-    last_hb: float = 0.0
-    sync_t0: float = 0.0
-    last_sync_warn: float = 0.0
-    depth_msg_count: int = 0
-    trade_msg_count: int = 0
-    ob_rows_written: int = 0
-    tr_rows_written: int = 0
-    last_depth_event_ms: int | None = None
-    last_trade_event_ms: int | None = None
-    needs_snapshot: bool = False
-    pending_snapshot_tag: str | None = None
-    phase: RecorderPhase = RecorderPhase.CONNECTING
-    last_ws_msg_time: float | None = None
-    last_no_data_warn: float = 0.0
-    first_data_emitted: bool = False
-
 
 def _parse_hhmm(value: str, label: str) -> tuple[int, int]:
     try:
@@ -162,7 +97,7 @@ def run_recorder():
     exchange = os.getenv("EXCHANGE", "binance").strip().lower()
     adapter = get_adapter(exchange)
     symbol = adapter.normalize_symbol(os.getenv("SYMBOL", "").strip())
-    symbol_fs = symbol.replace("/", "").replace("-", "").replace(":", "").replace(" ", "")
+    symbol_fs = symbol_fs_fn(symbol)
     if not symbol:
         raise RuntimeError("SYMBOL environment variable is required (e.g. SYMBOL=BTCUSDT).")
 
@@ -234,14 +169,6 @@ def run_recorder():
 
     # Run-scoped ids for audit and file naming
     run_id = int(time.time() * 1000)
-
-    def next_recv_seq() -> int:
-        state.recv_seq += 1
-        return state.recv_seq
-
-    def next_event_id() -> int:
-        state.event_id += 1
-        return state.event_id
 
     sub_depth = adapter.normalize_depth(DEPTH_LEVELS)
 
@@ -422,521 +349,50 @@ def run_recorder():
         last_sync_warn=time.time(),
     )
 
-    # Telemetry
-    proc_t0 = time.time()
-
-    # NOTE: Callbacks are invoked synchronously on the websocket event loop.
-    # Shared state mutations below assume a single-threaded event loop.
-    def _safe_close(obj, label: str) -> None:
-        if obj is None:
-            return
-        try:
-            obj.close()
-        except Exception:
-            log.exception("Failed to close %s", label)
-
-    def emit_event(ev_type: str, details: dict | str) -> int:
-        # Avoid failing during shutdown if events file is already closed
-        if ev_f.closed:
-            return -1
-
-        eid = next_event_id()
-        ts_recv_ms = int(time.time() * 1000)
-        ts_recv_seq = next_recv_seq()
-        details_s = json.dumps(details, ensure_ascii=False) if isinstance(details, dict) else str(details)
-        ev_w.writerow([eid, ts_recv_ms, ts_recv_seq, run_id, ev_type, state.epoch_id, details_s])
-        ev_f.flush()
-        return eid
-
-    def set_phase(new_phase: RecorderPhase, reason: str | None = None) -> None:
-        if state.phase == new_phase:
-            return
-        prev = state.phase
-        state.phase = new_phase
-        details = {"from": prev.value, "to": new_phase.value}
-        if reason:
-            details["reason"] = reason
-        emit_event("state_change", details)
-
-    def write_gap(event: str, details: str):
-        ts_recv_ms = int(time.time() * 1000)
-        ts_recv_seq = next_recv_seq()
-        gap_w.writerow([ts_recv_ms, ts_recv_seq, run_id, state.epoch_id, event, details])
-        gap_f.flush()
-
-    def heartbeat(force: bool = False):
-        now_s = time.time()
-        # Hard stop at end of recording window.
-        # This check is in heartbeat so we stop even if depth messages stop.
-        if (not state.window_end_emitted) and window_now() >= end:
-            state.window_end_emitted = True
-            emit_event("window_end", {"end": end.isoformat()})
-            try:
-                stream.close()
-            except Exception:
-                log.exception("Failed to close stream on window end (heartbeat)")
-            return
-        if (not force) and (now_s - state.last_hb < HEARTBEAT_SEC):
-            return
-        state.last_hb = now_s
-        uptime = now_s - proc_t0
-
-        if state.ws_open_count > 0 and state.last_ws_msg_time is not None:
-            idle_s = now_s - state.last_ws_msg_time
-            if idle_s >= WS_NO_DATA_WARN_S and (now_s - state.last_no_data_warn) >= WS_NO_DATA_WARN_S:
-                state.last_no_data_warn = now_s
-                emit_event("ws_no_data", {"idle_s": float(idle_s)})
-                log.warning("No WS data for %.1fs (phase=%s)", idle_s, state.phase.value)
-
-        log.info(
-            "HEARTBEAT uptime=%.0fs synced=%s snapshot=%s lastUpdateId=%s "
-            "depth_msgs=%d trade_msgs=%d ob_rows=%d tr_rows=%d buffer=%d "
-            "last_depth_E=%s last_trade_E=%s epoch_id=%d",
-            uptime,
-            engine.depth_synced,
-            engine.snapshot_loaded,
-            engine.lob.last_update_id,
-            state.depth_msg_count,
-            state.trade_msg_count,
-            state.ob_rows_written,
-            state.tr_rows_written,
-            len(engine.buffer),
-            state.last_depth_event_ms,
-            state.last_trade_event_ms,
-            state.epoch_id,
-        )
-
-    def warn_not_synced():
-        if engine.depth_synced:
-            return
-
-        if len(engine.buffer) > MAX_BUFFER_WARN:
-            log.warning("Depth buffer large: %d events (not synced). lastUpdateId=%s",
-                        len(engine.buffer), engine.lob.last_update_id)
-
-        now_s = time.time()
-        # Hard stop at end of recording window.
-        # This check is in heartbeat so we stop even if depth messages stop.
-        if (not state.window_end_emitted) and window_now() >= end:
-            state.window_end_emitted = True
-            emit_event("window_end", {"end": end.isoformat()})
-            try:
-                stream.close()
-            except Exception:
-                log.exception("Failed to close stream on window end (heartbeat)")
-            return
-        if (now_s - state.sync_t0) > SYNC_WARN_AFTER_SEC and (now_s - state.last_sync_warn) > SYNC_WARN_AFTER_SEC:
-            state.last_sync_warn = now_s
-            log.warning("Still not synced after %.0fs (buffer=%d)", now_s - state.sync_t0, len(engine.buffer))
-
-    def fetch_snapshot(tag: str):
-        client = rest_client
-
-        eid = emit_event("snapshot_request", {"tag": tag, "limit": SNAPSHOT_LIMIT})
-        lob, path, last_uid, raw_snapshot = record_rest_snapshot(
-            client=client,
-            symbol=symbol,
-            day_dir=day_dir,
-            snapshots_dir=snapshots_dir,
-            limit=SNAPSHOT_LIMIT,
-            run_id=run_id,
-            event_id=eid,
-            tag=tag,
-            decimals=DECIMALS,
-        )
-        raw_path = snapshots_dir / f"snapshot_{eid:06d}_{tag}.json"
-        write_snapshot_json(path=raw_path, payload=raw_snapshot)
-
-        engine.adopt_snapshot(lob)
-        state.sync_t0 = time.time()
-        state.last_sync_warn = time.time()
-
-        emit_event(
-            "snapshot_loaded",
-            {"tag": tag, "lastUpdateId": last_uid, "path": str(path), "raw_path": str(raw_path)},
-        )
-        log.info("Snapshot %s loaded lastUpdateId=%s (%s)", tag, last_uid, path)
-
-    def resync(reason: str):
-        state.resync_count += 1
-        state.epoch_id += 1
-        tag = f"resync_{state.resync_count:06d}"
-
-        set_phase(RecorderPhase.RESYNCING, reason)
-        log.warning("Resync triggered: %s", reason)
-        write_gap("resync_start", reason)
-        emit_event("resync_start", {"reason": reason, "tag": tag})
-
-        if "checksum_mismatch" in reason and hasattr(engine, "last_checksum_payload"):
-            payload = getattr(engine, "last_checksum_payload", None)
-            if payload:
-                debug_dir = day_dir / "debug"
-                debug_dir.mkdir(parents=True, exist_ok=True)
-                path = debug_dir / f"checksum_payload_{tag}.txt"
-                path.write_text(payload)
-                emit_event("checksum_payload_saved", {"tag": tag, "path": str(path)})
-
-        engine.reset_for_resync()
-
-        if adapter.sync_mode == "checksum":
-            state.needs_snapshot = True
-            state.pending_snapshot_tag = tag
-            try:
-                reconnect = getattr(stream, "disconnect", None) or getattr(stream, "close", None)
-                if reconnect is not None:
-                    reconnect()
-            except Exception:
-                log.exception("Failed to close stream for checksum resync")
-            return
-
-        try:
-            fetch_snapshot(tag)
-        except Exception as e:
-            log.exception("Resync snapshot failed; closing WS")
-            write_gap("fatal", f"{tag}_snapshot_failed: {e}")
-            emit_event("fatal", {"reason": "resync_snapshot_failed", "tag": tag, "error": str(e)})
-            stream.close()
-            return
-
-        write_gap("resync_done", f"tag={tag} lastUpdateId={engine.lob.last_update_id}")
-        emit_event("resync_done", {"tag": tag, "lastUpdateId": engine.lob.last_update_id})
-
-    def handle_snapshot(snapshot: BookSnapshot, tag: str):
-        set_phase(RecorderPhase.SYNCING, "snapshot_loaded")
-        details = {"tag": tag, "lastUpdateId": 0}
-        if snapshot.checksum is not None:
-            details["checksum"] = int(snapshot.checksum)
-        eid = emit_event("snapshot_loaded", details)
-        path = snapshots_dir / f"snapshot_{eid:06d}_{tag}.csv"
-        raw_path = snapshots_dir / f"snapshot_{eid:06d}_{tag}.json"
-        write_snapshot_csv(
-            path=path,
-            run_id=run_id,
-            event_id=eid,
-            bids=snapshot.bids,
-            asks=snapshot.asks,
-            last_update_id=0,
-            checksum=(int(snapshot.checksum) if snapshot.checksum is not None else None),
-            decimals=DECIMALS,
-        )
-        if snapshot.raw is not None:
-            write_snapshot_json(path=raw_path, payload=snapshot.raw)
-            emit_event("snapshot_raw_saved", {"path": str(raw_path), "tag": tag})
-        engine.adopt_snapshot(snapshot)
-        state.sync_t0 = time.time()
-        state.last_sync_warn = time.time()
-        if tag != "initial":
-            write_gap("resync_done", f"tag={tag} lastUpdateId=0")
-            emit_event("resync_done", {"tag": tag, "lastUpdateId": 0})
-
-    def write_topn(event_time_ms: int, recv_ms: int, recv_seq: int):
-        bids, asks = engine.lob.top_n(DEPTH_LEVELS)
-        bids += [(0.0, 0.0)] * (DEPTH_LEVELS - len(bids))
-        asks += [(0.0, 0.0)] * (DEPTH_LEVELS - len(asks))
-
-        row = [event_time_ms, recv_ms, recv_seq, run_id, state.epoch_id]
-        for i in range(DEPTH_LEVELS):
-            bp, bq = bids[i]
-            ap, aq = asks[i]
-            row += [
-                f"{bp:.{DECIMALS}f}",
-                f"{bq:.{DECIMALS}f}",
-                f"{ap:.{DECIMALS}f}",
-                f"{aq:.{DECIMALS}f}",
-            ]
-
-        ob_writer.write_row(row)
-        state.ob_rows_written += 1
-
-    def on_open():
-        state.ws_open_count += 1
-        set_phase(RecorderPhase.SNAPSHOT, "ws_open")
-
-        # First open: initial snapshot. Any subsequent open is treated as a reconnect and triggers a resync.
-        if state.ws_open_count == 1:
-            state.epoch_id = 0
-            emit_event(
-                "ws_open",
-                {
-                    "ws_url": ws_url,
-                    "ping_interval_s": WS_PING_INTERVAL_S,
-                    "ping_timeout_s": WS_PING_TIMEOUT_S,
-                    "insecure_tls": INSECURE_TLS,
-                },
-            )
-            if adapter.sync_mode == "checksum":
-                state.needs_snapshot = True
-                state.pending_snapshot_tag = "initial"
-            else:
-                try:
-                    fetch_snapshot("initial")
-                except Exception as e:
-                    log.exception("Failed initial snapshot; closing WS")
-                    write_gap("fatal", f"initial_snapshot_failed: {e}")
-                    emit_event("fatal", {"reason": "initial_snapshot_failed", "error": str(e)})
-                    stream.close()
-        else:
-            emit_event("ws_reconnect_open", {"ws_url": ws_url, "open_count": state.ws_open_count})
-            # Any reconnect implies potential missed diffs; always resync.
-            if adapter.sync_mode == "checksum":
-                if not state.needs_snapshot:
-                    resync("ws_reconnect")
-            else:
-                resync("ws_reconnect")
-
-    def handle_depth(parsed: DepthDiff, recv_ms: int):
-        msg_recv_seq = next_recv_seq()
-
-        state.depth_msg_count += 1
-        state.last_depth_event_ms = int(parsed.event_time_ms)
-        state.last_ws_msg_time = time.time()
-        if not state.first_data_emitted:
-            state.first_data_emitted = True
-            emit_event("ws_first_data", {"type": "depth"})
-            log.info("WS data flowing (first depth message).")
-
-        # Always store raw diffs for replay, even when not synced
-        if diff_writer is not None:
-            try:
-                minimal = {
-                    "recv_ms": recv_ms,
-                    "recv_seq": msg_recv_seq,
-                    "E": int(parsed.event_time_ms),
-                    "U": int(parsed.U),
-                    "u": int(parsed.u),
-                    "b": parsed.bids,
-                    "a": parsed.asks,
-                }
-                if parsed.checksum is not None:
-                    minimal["checksum"] = int(parsed.checksum)
-                minimal["exchange"] = exchange
-                minimal["symbol"] = symbol
-                if parsed.raw is not None:
-                    minimal["raw"] = parsed.raw
-                diff_writer.write_line(json.dumps(minimal, ensure_ascii=False, default=str) + "\n")
-            except Exception:
-                log.exception("Failed writing depth diffs")
-        if live_diff_writer is not None:
-            try:
-                minimal_live = {
-                    "recv_ms": recv_ms,
-                    "recv_seq": msg_recv_seq,
-                    "E": int(parsed.event_time_ms),
-                    "U": int(parsed.U),
-                    "u": int(parsed.u),
-                    "b": parsed.bids,
-                    "a": parsed.asks,
-                    "exchange": exchange,
-                    "symbol": symbol,
-                }
-                if parsed.checksum is not None:
-                    minimal_live["checksum"] = int(parsed.checksum)
-                if parsed.raw is not None:
-                    minimal_live["raw"] = parsed.raw
-                live_diff_writer.write_line(json.dumps(minimal_live, ensure_ascii=False, default=str) + "\n")
-            except Exception:
-                log.exception("Failed writing live depth diffs")
-
-        # Stop at end of window.
-        #
-        # This must remain enabled in production. If disabled, the recorder will
-        # continue running and will keep writing into the *startup* day directory,
-        # effectively mixing multiple trading days into the same folder.
-        if (not state.window_end_emitted) and window_now() >= end:
-            state.window_end_emitted = True
-            emit_event("window_end", {"end": end.isoformat()})
-            try:
-                stream.close()
-            except Exception:
-                log.exception("Failed to close stream on window end")
-            return
-
-        try:
-            if adapter.sync_mode == "checksum":
-                result = engine.feed_depth_event(parsed)
-            else:
-                result = engine.feed_depth_event(
-                    {"E": parsed.event_time_ms, "U": parsed.U, "u": parsed.u, "b": parsed.bids, "a": parsed.asks}
-                )
-
-            if result.action == "gap":
-                resync(result.details)
-                heartbeat()
-                return
-
-            if result.action in ("synced", "applied") and engine.depth_synced:
-                set_phase(RecorderPhase.SYNCED, "depth_synced")
-                write_topn(event_time_ms=int(parsed.event_time_ms), recv_ms=recv_ms, recv_seq=msg_recv_seq)
-
-            if result.action == "buffered":
-                warn_not_synced()
-
-        except Exception:
-            log.exception("Unhandled exception in on_depth")
-            resync("exception_in_on_depth")
-
-        finally:
-            heartbeat()
-
-    def handle_trade(parsed: Trade, recv_ms: int):
-
-        state.trade_msg_count += 1
-        state.last_trade_event_ms = int(parsed.event_time_ms)
-        state.last_ws_msg_time = time.time()
-        if not state.first_data_emitted:
-            state.first_data_emitted = True
-            emit_event("ws_first_data", {"type": "trade"})
-            log.info("WS data flowing (first trade message).")
-
-        msg_recv_seq = next_recv_seq()
-
-        try:
-            side = parsed.side
-            if side is None:
-                side = "sell" if int(parsed.is_buyer_maker) == 1 else "buy"
-            tr_writer.write_row(
-                [
-                    int(parsed.event_time_ms),
-                    recv_ms,
-                    msg_recv_seq,
-                    run_id,
-                    int(parsed.trade_id),
-                    int(parsed.trade_time_ms),
-                    f"{float(parsed.price):.{DECIMALS}f}",
-                    f"{float(parsed.qty):.{DECIMALS}f}",
-                    int(parsed.is_buyer_maker),
-                    side or "",
-                    parsed.ord_type or "",
-                    exchange,
-                    symbol,
-                ]
-            )
-            state.tr_rows_written += 1
-            raw_payload = None
-            if parsed.raw is not None:
-                raw_payload = {
-                    "recv_ms": recv_ms,
-                    "recv_seq": msg_recv_seq,
-                    "event_time_ms": int(parsed.event_time_ms),
-                    "trade_id": int(parsed.trade_id),
-                    "price": parsed.price,
-                    "qty": parsed.qty,
-                    "side": side,
-                    "exchange": exchange,
-                    "symbol": symbol,
-                    "raw": parsed.raw,
-                }
-                tr_raw_writer.write_line(json.dumps(raw_payload, ensure_ascii=False, default=str) + "\n")
-            if live_trade_writer is not None:
-                try:
-                    live_payload = raw_payload if raw_payload is not None else {
-                        "recv_ms": recv_ms,
-                        "recv_seq": msg_recv_seq,
-                        "event_time_ms": int(parsed.event_time_ms),
-                        "trade_id": int(parsed.trade_id),
-                        "price": parsed.price,
-                        "qty": parsed.qty,
-                        "side": side,
-                        "exchange": exchange,
-                        "symbol": symbol,
-                    }
-                    live_trade_writer.write_line(json.dumps(live_payload, ensure_ascii=False, default=str) + "\n")
-                except Exception:
-                    log.exception("Failed writing live trades")
-        except Exception:
-            log.exception(
-                "Unhandled exception in on_trade trade_id=%s event_time_ms=%s recv_ms=%s",
-                getattr(parsed, "trade_id", None),
-                getattr(parsed, "event_time_ms", None),
-                recv_ms,
-            )
-        finally:
-            heartbeat()
-
-    def on_depth(data, recv_ms: int):
-        try:
-            parsed = adapter.parse_depth(data)
-        except Exception:
-            log.exception("Failed to parse depth message")
-            return
-        handle_depth(parsed, recv_ms)
-
-    def on_trade(data: dict, recv_ms: int):
-        try:
-            parsed = adapter.parse_trade(data)
-        except Exception:
-            log.exception("Failed to parse trade message")
-            return
-        handle_trade(parsed, recv_ms)
-
-    def on_message(data: dict, recv_ms: int):
-        state.last_ws_msg_time = time.time()
-        if not state.first_data_emitted:
-            state.first_data_emitted = True
-            emit_event("ws_first_data", {"type": "custom"})
-            log.info("WS data flowing (first custom message).")
-        if isinstance(data, dict) and data.get("method") == "subscribe":
-            emit_event(
-                "ws_subscribe_ack",
-                {
-                    "success": data.get("success"),
-                    "result": data.get("result"),
-                    "error": data.get("error"),
-                },
-            )
-            if data.get("error"):
-                log.warning("WS subscribe error: %s", data.get("error"))
-        elif isinstance(data, dict) and data.get("event") == "error":
-            emit_event("ws_error_payload", {"error": data.get("msg") or data})
-            log.warning("WS error payload: %s", data.get("msg") or data)
-        elif isinstance(data, dict) and data.get("event") == "info":
-            code = data.get("code")
-            emit_event("ws_info", {"code": code, "msg": data.get("msg")})
-            if code == 20051:
-                emit_event("ws_info_reconnect", {"code": code, "msg": data.get("msg")})
-                try:
-                    if stream:
-                        stream.disconnect()
-                except Exception:
-                    log.exception("Failed to disconnect after ws_info reconnect")
-        elif isinstance(data, dict) and data.get("error"):
-            emit_event("ws_error_payload", {"error": data.get("error")})
-            log.warning("WS error payload: %s", data.get("error"))
-        try:
-            snapshots, diffs, trades = adapter.parse_ws_message(data)
-        except Exception:
-            log.exception("Failed to parse WS message")
-            return
-        for snap in snapshots:
-            if state.needs_snapshot:
-                tag = state.pending_snapshot_tag or "snapshot"
-                handle_snapshot(snap, tag)
-                state.needs_snapshot = False
-                state.pending_snapshot_tag = None
-        for diff in diffs:
-            handle_depth(diff, recv_ms)
-        for tr in trades:
-            handle_trade(tr, recv_ms)
-
     ws_url = adapter.ws_url(symbol)
 
-    def on_status(typ: str, details: dict):
-        # Keep the on-disk events ledger authoritative for operational debugging.
-        emit_event(typ, details)
-        log.info("WS status: %s %s", typ, details)
-        if typ == "ws_connecting":
-            set_phase(RecorderPhase.CONNECTING, "ws_connecting")
+    ctx = RecorderContext(
+        adapter=adapter,
+        exchange=exchange,
+        symbol=symbol,
+        symbol_fs=symbol_fs,
+        run_id=run_id,
+        day_dir=day_dir,
+        snapshots_dir=snapshots_dir,
+        diffs_dir=diffs_dir,
+        trades_dir=trades_dir,
+        window_end=end,
+        ws_url=ws_url,
+        sub_depth=sub_depth,
+        log=log,
+        engine=engine,
+        state=state,
+        rest_client=rest_client,
+        record_rest_snapshot_fn=record_rest_snapshot,
+        ob_writer=ob_writer,
+        tr_writer=tr_writer,
+        gap_f=gap_f,
+        ev_f=ev_f,
+        gap_w=gap_w,
+        ev_w=ev_w,
+        diff_writer=diff_writer,
+        tr_raw_writer=tr_raw_writer,
+        live_diff_writer=live_diff_writer,
+        live_trade_writer=live_trade_writer,
+    )
+
+    callbacks = RecorderCallbacks(ctx, window_now)
 
     # Backwards-compatible construction: tests may monkeypatch BinanceWSStream with a
     # simplified fake that does not accept newer parameters.
     try:
         stream = BinanceWSStream(
             ws_url=ws_url,
-            on_depth=on_depth,
-            on_trade=on_trade,
-            on_open=on_open,
-            on_status=on_status,
-            on_message=(on_message if adapter.uses_custom_ws_messages else None),
+            on_depth=callbacks.on_depth,
+            on_trade=callbacks.on_trade,
+            on_open=callbacks.on_open,
+            on_status=callbacks.on_status,
+            on_message=(callbacks.on_message if adapter.uses_custom_ws_messages else None),
             insecure_tls=INSECURE_TLS,
             ping_interval_s=WS_PING_INTERVAL_S,
             ping_timeout_s=WS_PING_TIMEOUT_S,
@@ -949,13 +405,15 @@ def run_recorder():
     except TypeError:
         stream = BinanceWSStream(
             ws_url=ws_url,
-            on_depth=on_depth,
-            on_trade=on_trade,
-            on_open=on_open,
+            on_depth=callbacks.on_depth,
+            on_trade=callbacks.on_trade,
+            on_open=callbacks.on_open,
             insecure_tls=INSECURE_TLS,
         )
 
-    emit_event("run_start", {"symbol": symbol, "symbol_fs": symbol_fs, "day": day_str})
+    callbacks.attach_stream(stream)
+
+    callbacks.emit_event("run_start", {"symbol": symbol, "symbol_fs": symbol_fs, "day": day_str})
     log.info("Connecting WS: %s", ws_url)
 
     try:
@@ -964,30 +422,7 @@ def run_recorder():
             raise RuntimeError("BinanceWSStream has no run()/run_forever()")
         run_fn()
     finally:
-        # Emit stop event BEFORE closing event file
-        try:
-            emit_event("run_stop", {"symbol": symbol})
-        except Exception:
-            log.exception("Failed to emit run_stop event")
-
-        set_phase(RecorderPhase.STOPPED, "run_stop")
-        # heartbeat can still run after this (it only logs)
-        heartbeat(force=True)
-
-        for f in (gap_f, ev_f):
-            _safe_close(f, f"file {getattr(f, 'name', 'unknown')}")
-
-        _safe_close(ob_writer, "orderbook_writer")
-        _safe_close(tr_writer, "trades_writer")
-
-        _safe_close(tr_raw_writer, "trades_raw_writer")
-
-        _safe_close(diff_writer, "diff_writer")
-
-        for writer in (live_diff_writer, live_trade_writer):
-            _safe_close(writer, "live_writer")
-
-        log.info("Recorder stopped.")
+        callbacks.shutdown()
 
 
 def main():

@@ -12,14 +12,11 @@ from mm_history.combiner import (
 from mm_history.exchanges.binance import BinanceHistoricalClient
 from mm_history.types import Candle
 from mm_history.writer import write_candles_csv
+from mm_core.symbols import symbol_fs as symbol_fs_fn
 
 
 def _env(name: str, default: str | None = None) -> str | None:
     return os.getenv(name, default)
-
-
-def _symbol_fs(symbol: str) -> str:
-    return symbol.replace("/", "").replace("-", "").replace(":", "").replace(" ", "")
 
 
 def _find_trades_files(day_dir: Path, symbol_fs: str) -> List[Path]:
@@ -32,7 +29,7 @@ def build_local_candles_from_trades(
     interval: str,
     data_root: Path,
 ) -> List[Path]:
-    symbol_fs = _symbol_fs(symbol)
+    symbol_fs = symbol_fs_fn(symbol)
     base = data_root / exchange / symbol_fs
     if not base.exists():
         return []

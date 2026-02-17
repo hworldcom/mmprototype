@@ -3,8 +3,9 @@
 This package houses every component required to capture Binance Spot depth and trade data, reconstruct level-2 books, and persist replay-ready artifacts for downstream research.
 
 It includes the `mm_core` package for the shared order book and sync state machine.
-The recorder avoids `python-binance` and calls the public REST depth endpoint directly
-for snapshots; if you later need signed endpoints or user streams, you can reintroduce it.
+The recorder avoids `python-binance` and uses a lightweight Binance REST client with
+retries for snapshots; if you later need signed endpoints or user streams, you can
+reintroduce them via a custom client.
 
 ## Architecture
 
@@ -14,12 +15,16 @@ for snapshots; if you later need signed endpoints or user streams, you can reint
 | `mm_core/sync_engine.py` | Pure state machine that bridges REST snapshots with WebSocket depth diffs and detects any sequencing gap. |
 | `mm_core/checksum/kraken.py` | Checksum-based sync engine for exchanges like Kraken (verifies CRC checksums instead of sequence ids). |
 | `mm_core/checksum/bitfinex.py` | Checksum-based sync engine for Bitfinex (CRC checksum frames). |
-| `mm_core/local_orderbook.py` | Lightweight in-memory book keyed by price, used by the recorder and sync engine. |
+| `mm_core/local_orderbook.py` | SortedDict-backed in-memory book keyed by price, used by the recorder and sync engine. |
+| `mm_recorder/recorder_callbacks.py` | WebSocket callback handlers (emit, heartbeat, snapshot, depth, trade). |
+| `mm_recorder/recorder_context.py` | Recorder wiring for writers, adapters, and runtime state. |
+| `mm_recorder/recorder_settings.py` | Env-backed configuration constants. |
+| `mm_recorder/recorder_types.py` | Recorder phase and state dataclasses. |
 | `mm_recorder/buffered_writer.py` | Buffered CSV writer that batches rows in memory to reduce fsync pressure. |
 | `mm_recorder/ws_stream.py` | Async websocket client with reconnect, ping/pong, and backoff. |
 | `mm_recorder/snapshot.py` | Snapshot helper that serializes CSV + raw JSON snapshots for audit and resyncs. |
 
-The repository includes tests that validate epochs, header handling, and recorder output contracts. Those tests run offline thanks to the client-creation guard in `recorder.py`.
+The repository includes tests that validate epochs, header handling, and recorder output contracts. Those tests run offline by monkeypatching `record_rest_snapshot` while the recorder uses the lightweight REST client in normal runs.
 
 Recent additions:
 - `mm_history` for historical candle/trade extraction and local+exchange candle combining.
@@ -196,6 +201,11 @@ If you vendor this repo into another build context, ensure `mm_core` is present 
 | `LIVE_STREAM` | Enable rolling uncompressed live files for WS relay (default: `1`). |
 | `LIVE_STREAM_ROTATE_S` | Rotate live files after this many seconds (default: `60`). |
 | `LIVE_STREAM_RETENTION_S` | Retain rotated live files for this many seconds (default: `3600`). |
+| `BINANCE_REST_BASE_URL` | Base URL for Binance REST snapshots (default: `https://api.binance.com`). |
+| `SNAPSHOT_TIMEOUT_S` | REST snapshot timeout in seconds (default: `10`). |
+| `SNAPSHOT_RETRY_MAX` | Max snapshot retries (default: `3`). |
+| `SNAPSHOT_RETRY_BACKOFF_S` | Initial snapshot retry backoff in seconds (default: `0.5`). |
+| `SNAPSHOT_RETRY_BACKOFF_MAX_S` | Max snapshot retry backoff in seconds (default: `5`). |
 | `WINDOW_TZ` (env) | Timezone used for start/end windows (default: `Europe/Berlin`). |
 | `WINDOW_START_HHMM` (env) | Window start time in 24h `HH:MM` (default: `00:00`). |
 | `WINDOW_END_HHMM` (env) | Window end time in 24h `HH:MM` (default: `00:15`). |
@@ -241,4 +251,5 @@ python ws_clients/metrics_client.py
 
 - `mm_recorder.logging_config` is used to configure per-run logging.
 - `mm_core` supplies the shared order book and sync engine.
-- Tests under `tests/` include checksum engine coverage for Kraken/Bitfinex and monkeypatch `record_rest_snapshot`; `recorder.py` only instantiates a real `binance.Client` when the original function is in use.
+- `sortedcontainers` is used for an efficient in-memory order book.
+- Tests under `tests/` include checksum engine coverage for Kraken/Bitfinex and monkeypatch `record_rest_snapshot` for offline runs.

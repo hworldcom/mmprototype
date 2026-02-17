@@ -8,6 +8,7 @@ from typing import List, Optional
 from mm_history.exchanges.binance import BinanceHistoricalClient
 from mm_history.types import Candle, Trade
 from mm_history.writer import write_candles_csv, write_trades_ndjson
+from mm_core.symbols import symbol_fs as symbol_fs_fn
 
 
 def _env(name: str, default: Optional[str] = None) -> Optional[str]:
@@ -19,10 +20,6 @@ def _parse_ms(value: str) -> int:
     if raw < 1_000_000_000_000:
         return raw * 1000
     return raw
-
-
-def _symbol_fs(symbol: str) -> str:
-    return symbol.replace("/", "").replace("-", "").replace(":", "").replace(" ", "")
 
 
 def _day_str(ts_ms: int) -> str:
@@ -85,7 +82,7 @@ def main() -> None:
         if not candles:
             raise SystemExit("No candles returned")
 
-        symbol_fs = _symbol_fs(symbol_norm)
+        symbol_fs = symbol_fs_fn(symbol_norm)
         day_str = _day_str(start_ms)
         out_dir = Path("data") / exchange / symbol_fs / day_str / "history"
         out_path = out_dir / f"candles_{interval}_{symbol_fs}_{day_str}.csv.gz"
@@ -123,7 +120,7 @@ def main() -> None:
         if not trades:
             raise SystemExit("No trades returned")
 
-        symbol_fs = _symbol_fs(symbol_norm)
+        symbol_fs = symbol_fs_fn(symbol_norm)
         day_str = _day_str(start_ms)
         out_dir = Path("data") / exchange / symbol_fs / day_str / "history"
         out_path = out_dir / f"trades_{symbol_fs}_{day_str}.ndjson.gz"

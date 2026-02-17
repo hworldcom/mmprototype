@@ -3,6 +3,8 @@
 from pathlib import Path
 import os
 
+from mm_core.symbols import symbol_fs as symbol_fs_fn
+
 
 def day_str(recorder_mod) -> str:
     now = recorder_mod.window_now()
@@ -22,7 +24,7 @@ def _exchange(recorder_mod) -> str:
 def _symbol_fs(recorder_mod, symbol: str) -> str:
     adapter = recorder_mod.get_adapter(_exchange(recorder_mod))
     normalized = adapter.normalize_symbol(symbol)
-    return normalized.replace("/", "").replace("-", "").replace(":", "").replace(" ", "")
+    return symbol_fs_fn(normalized)
 
 
 def day_dir(tmp_path: Path, recorder_mod, symbol: str) -> Path:
