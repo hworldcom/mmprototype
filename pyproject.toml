@@ -12,6 +12,7 @@ dependencies = [
   "websockets>=14,<16",
   "certifi",
   "requests",
+  "sortedcontainers>=2.4,<3",
 ]
 
 [project.scripts]

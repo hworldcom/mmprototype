@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from itertools import islice
+from typing import List, Optional, Tuple
+
+from sortedcontainers import SortedDict
 
 
 @dataclass
@@ -14,8 +17,8 @@ class LocalOrderBook:
       - last_update_id follows Binance depth diff semantics.
     """
 
-    bids: Dict[float, float] = field(default_factory=dict)
-    asks: Dict[float, float] = field(default_factory=dict)
+    bids: SortedDict = field(default_factory=SortedDict)
+    asks: SortedDict = field(default_factory=SortedDict)
     last_update_id: Optional[int] = None
 
     def load_snapshot(self, bids: List[List[str]], asks: List[List[str]], last_update_id: int) -> None:
@@ -80,6 +83,10 @@ class LocalOrderBook:
         return True
 
     def top_n(self, n: int) -> Tuple[List[Tuple[float, float]], List[Tuple[float, float]]]:
-        bids_sorted = sorted(self.bids.items(), key=lambda x: x[0], reverse=True)[:n]
-        asks_sorted = sorted(self.asks.items(), key=lambda x: x[0])[:n]
+        if n <= 0:
+            return [], []
+        bids_iter = reversed(self.bids.items())
+        asks_iter = iter(self.asks.items())
+        bids_sorted = list(islice(bids_iter, n))
+        asks_sorted = list(islice(asks_iter, n))
         return bids_sorted, asks_sorted

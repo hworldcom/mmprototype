@@ -2,3 +2,4 @@ websockets>=14,<16
 certifi
 pytest
 requests
+sortedcontainers>=2.4,<3

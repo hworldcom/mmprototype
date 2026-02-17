@@ -150,8 +150,10 @@ class BitfinexSyncEngine:
     def adopt_snapshot(self, snapshot: BookSnapshot) -> None:
         self.book.load_snapshot(snapshot.bids, snapshot.asks)
         bids, asks = self.book.top_n(self.depth)
-        self.lob.bids = {p: q for p, q in bids}
-        self.lob.asks = {p: q for p, q in asks}
+        self.lob.bids.clear()
+        self.lob.asks.clear()
+        self.lob.bids.update({p: q for p, q in bids})
+        self.lob.asks.update({p: q for p, q in asks})
         self.snapshot_loaded = True
         self.depth_synced = True
         if self.buffer:
@@ -175,8 +177,10 @@ class BitfinexSyncEngine:
         if raw.get("type") == "update":
             self.book.apply_update(raw.get("price", "0"), int(raw.get("count", 0)), raw.get("amount", "0"))
             bids, asks = self.book.top_n(self.depth)
-            self.lob.bids = {p: q for p, q in bids}
-            self.lob.asks = {p: q for p, q in asks}
+            self.lob.bids.clear()
+            self.lob.asks.clear()
+            self.lob.bids.update({p: q for p, q in bids})
+            self.lob.asks.update({p: q for p, q in asks})
 
         if ev.checksum is not None or raw.get("type") == "checksum":
             calc = self.book.checksum(25)
