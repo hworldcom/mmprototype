@@ -7,6 +7,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List
 
+import logging
+
+log = logging.getLogger("mm_api.tailer")
+
+
+def _parse_json_line(line: str) -> Dict[str, Any] | None:
+    try:
+        return json.loads(line)
+    except Exception:
+        log.exception("Failed to parse JSON line")
+        return None
+
 
 @dataclass
 class TailState:
@@ -57,7 +69,9 @@ def tail_ndjson(path: Path, state: TailState) -> List[Dict[str, Any]]:
     for line in new_lines:
         if not line:
             continue
-        payloads.append(json.loads(line))
+        payload = _parse_json_line(line)
+        if payload is not None:
+            payloads.append(payload)
     return payloads
 
 
@@ -74,7 +88,9 @@ def tail_text_ndjson(path: Path, state: TailState) -> List[Dict[str, Any]]:
     for line in new_lines:
         if not line:
             continue
-        payloads.append(json.loads(line))
+        payload = _parse_json_line(line)
+        if payload is not None:
+            payloads.append(payload)
     return payloads
 
 
