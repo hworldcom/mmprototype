@@ -234,6 +234,8 @@ async def _stream_loop(
             diff_state = TailState()
             trade_state = TailState()
             event_state = TailState()
+            book = _TopOfBook()
+            last_best = (None, None)
             if from_mode == "tail":
                 for path, state in (
                     (diff_path, diff_state),
@@ -246,11 +248,19 @@ async def _stream_loop(
                         else:
                             state.line_index = count_text_lines(path)
             await _send_status(ws, exchange, symbol, f"switched to new day folder {current_day_dir}")
+            snapshot_data = _load_snapshot_data(
+                str(paths.get("snapshot")) if paths.get("snapshot") else None
+            )
+            if snapshot_data:
+                bids = snapshot_data.get("bids") or snapshot_data.get("b") or []
+                asks = snapshot_data.get("asks") or snapshot_data.get("a") or []
+                if bids or asks:
+                    book.seed(bids, asks)
             await _send_snapshot(
                 ws,
                 exchange,
                 symbol,
-                str(paths.get("snapshot")) if paths.get("snapshot") else None,
+                snapshot_data,
             )
         if diff_path:
             tailer = tail_ndjson if diff_path.suffix == ".gz" else tail_text_ndjson

@@ -803,7 +803,12 @@ def run_recorder():
                 except Exception:
                     log.exception("Failed writing live trades")
         except Exception:
-            log.exception("Unhandled exception in on_trade (message=%s)", data)
+            log.exception(
+                "Unhandled exception in on_trade trade_id=%s event_time_ms=%s recv_ms=%s",
+                getattr(parsed, "trade_id", None),
+                getattr(parsed, "event_time_ms", None),
+                recv_ms,
+            )
         finally:
             heartbeat()
 
