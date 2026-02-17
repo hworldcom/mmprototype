@@ -20,7 +20,7 @@ Note: The project supports running unit tests in minimal environments where
 
 from mm_recorder.logging_config import setup_logging
 from mm_recorder.ws_stream import BinanceWSStream
-from mm_recorder.snapshot import record_rest_snapshot, write_snapshot_csv, write_snapshot_json
+from mm_recorder.snapshot import record_rest_snapshot, write_snapshot_csv, write_snapshot_json, make_rest_client
 from mm_recorder.buffered_writer import BufferedCSVWriter, BufferedTextWriter, _is_empty_text_file
 from mm_recorder.live_writer import LiveNdjsonWriter
 from mm_recorder.exchanges import get_adapter
@@ -40,23 +40,50 @@ ORDERBOOK_BUFFER_ROWS = 500
 TRADES_BUFFER_ROWS = 1000
 BUFFER_FLUSH_INTERVAL_SEC = 1.0
 
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "y")
+
+
 # WS keepalive/reconnect
-WS_PING_INTERVAL_S = int(os.getenv("WS_PING_INTERVAL_S", "20"))
-WS_PING_TIMEOUT_S = int(os.getenv("WS_PING_TIMEOUT_S", "60"))
-WS_RECONNECT_BACKOFF_S = float(os.getenv("WS_RECONNECT_BACKOFF_S", "1.0"))
-WS_RECONNECT_BACKOFF_MAX_S = float(os.getenv("WS_RECONNECT_BACKOFF_MAX_S", "30.0"))
-WS_MAX_SESSION_S = float(os.getenv("WS_MAX_SESSION_S", str(23 * 3600 + 50 * 60)))
-WS_OPEN_TIMEOUT_S = float(os.getenv("WS_OPEN_TIMEOUT_S", "10.0"))
-WS_NO_DATA_WARN_S = float(os.getenv("WS_NO_DATA_WARN_S", "10.0"))
+WS_PING_INTERVAL_S = _env_int("WS_PING_INTERVAL_S", 20)
+WS_PING_TIMEOUT_S = _env_int("WS_PING_TIMEOUT_S", 60)
+WS_RECONNECT_BACKOFF_S = _env_float("WS_RECONNECT_BACKOFF_S", 1.0)
+WS_RECONNECT_BACKOFF_MAX_S = _env_float("WS_RECONNECT_BACKOFF_MAX_S", 30.0)
+WS_MAX_SESSION_S = _env_float("WS_MAX_SESSION_S", float(23 * 3600 + 50 * 60))
+WS_OPEN_TIMEOUT_S = _env_float("WS_OPEN_TIMEOUT_S", 10.0)
+WS_NO_DATA_WARN_S = _env_float("WS_NO_DATA_WARN_S", 10.0)
 
 # TLS verification should remain enabled by default.
-INSECURE_TLS = os.getenv("INSECURE_TLS", "0").strip() in ("1", "true", "True")
+INSECURE_TLS = _env_bool("INSECURE_TLS", False)
 
 # If True, write raw WS depth diffs for production-faithful replay
 STORE_DEPTH_DIFFS = True
-LIVE_STREAM_ENABLED = os.getenv("LIVE_STREAM", "1").strip() in ("1", "true", "True")
-LIVE_STREAM_ROTATE_S = float(os.getenv("LIVE_STREAM_ROTATE_S", "60"))
-LIVE_STREAM_RETENTION_S = float(os.getenv("LIVE_STREAM_RETENTION_S", str(60 * 60)))
+LIVE_STREAM_ENABLED = _env_bool("LIVE_STREAM", True)
+LIVE_STREAM_ROTATE_S = _env_float("LIVE_STREAM_ROTATE_S", 60.0)
+LIVE_STREAM_RETENTION_S = _env_float("LIVE_STREAM_RETENTION_S", float(60 * 60))
 
 class RecorderPhase(str, Enum):
     CONNECTING = "connecting"
@@ -138,6 +165,10 @@ def run_recorder():
     symbol_fs = symbol.replace("/", "").replace("-", "").replace(":", "").replace(" ", "")
     if not symbol:
         raise RuntimeError("SYMBOL environment variable is required (e.g. SYMBOL=BTCUSDT).")
+
+    rest_client = make_rest_client(exchange)
+    if adapter.sync_mode == "sequence" and rest_client is None:
+        raise RuntimeError(f"No REST snapshot client configured for exchange={exchange}")
 
     now = window_now()
     window_start, window_end = compute_window(now)
@@ -394,6 +425,16 @@ def run_recorder():
     # Telemetry
     proc_t0 = time.time()
 
+    # NOTE: Callbacks are invoked synchronously on the websocket event loop.
+    # Shared state mutations below assume a single-threaded event loop.
+    def _safe_close(obj, label: str) -> None:
+        if obj is None:
+            return
+        try:
+            obj.close()
+        except Exception:
+            log.exception("Failed to close %s", label)
+
     def emit_event(ev_type: str, details: dict | str) -> int:
         # Avoid failing during shutdown if events file is already closed
         if ev_f.closed:
@@ -489,7 +530,7 @@ def run_recorder():
             log.warning("Still not synced after %.0fs (buffer=%d)", now_s - state.sync_t0, len(engine.buffer))
 
     def fetch_snapshot(tag: str):
-        client = None
+        client = rest_client
 
         eid = emit_event("snapshot_request", {"tag": tag, "limit": SNAPSHOT_LIMIT})
         lob, path, last_uid, raw_snapshot = record_rest_snapshot(
@@ -934,34 +975,17 @@ def run_recorder():
         heartbeat(force=True)
 
         for f in (gap_f, ev_f):
-            try:
-                f.close()
-            except Exception:
-                pass
+            _safe_close(f, f"file {getattr(f, 'name', 'unknown')}")
 
-        for writer in (ob_writer, tr_writer):
-            try:
-                writer.close()
-            except Exception:
-                pass
+        _safe_close(ob_writer, "orderbook_writer")
+        _safe_close(tr_writer, "trades_writer")
 
-        try:
-            tr_raw_writer.close()
-        except Exception:
-            pass
+        _safe_close(tr_raw_writer, "trades_raw_writer")
 
-        if diff_writer is not None:
-            try:
-                diff_writer.close()
-            except Exception:
-                pass
+        _safe_close(diff_writer, "diff_writer")
 
         for writer in (live_diff_writer, live_trade_writer):
-            if writer is not None:
-                try:
-                    writer.close()
-                except Exception:
-                    pass
+            _safe_close(writer, "live_writer")
 
         log.info("Recorder stopped.")
 
