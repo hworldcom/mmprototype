@@ -398,6 +398,8 @@ async def _handler(ws: Any) -> None:
     await _send_status(ws, exchange, symbol, "connected")
     try:
         await _stream_loop(ws, exchange, symbol, from_mode)
+    except ValueError as exc:
+        await _send_status(ws, exchange, symbol, f"invalid params: {exc}")
     except websockets.ConnectionClosed:
         return
 

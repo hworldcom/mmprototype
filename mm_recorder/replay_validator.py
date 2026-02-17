@@ -74,7 +74,7 @@ def _load_snapshot_csv(path: Path) -> tuple[list[list[str]], list[list[str]], Op
                 try:
                     checksum = int(row[checksum_idx])
                 except Exception:
-                    checksum = checksum
+                    pass
     return bids, asks, checksum
 
 

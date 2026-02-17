@@ -63,10 +63,9 @@ def record_rest_snapshot(
         except Exception as exc:
             raise RuntimeError(f"REST snapshot via client failed: {exc}") from exc
     else:
-        url = "https://api.binance.com/api/v3/depth"
-        resp = requests.get(url, params={"symbol": symbol, "limit": limit}, timeout=10)
-        resp.raise_for_status()
-        snap = resp.json()
+        raise RuntimeError(
+            "REST snapshot requires a client; Binance-only fallback removed to prevent cross-exchange misuse."
+        )
     last_update_id = int(snap["lastUpdateId"])
 
     lob = LocalOrderBook()

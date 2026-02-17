@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Optional
 
 
@@ -17,8 +18,30 @@ def _latest_day_dir(root: Path) -> Optional[Path]:
     return sorted(day_dirs, key=lambda p: p.name)[-1]
 
 
+_EXCHANGE_RE = re.compile(r"^[a-z0-9_]+$")
+_SYMBOL_RE = re.compile(r"^[A-Za-z0-9/:\- ]+$")
+
+
+def sanitize_exchange(exchange: str) -> str:
+    exchange = (exchange or "").strip().lower()
+    if not exchange or ".." in exchange or not _EXCHANGE_RE.match(exchange):
+        raise ValueError("invalid exchange")
+    return exchange
+
+
+def sanitize_symbol(symbol: str) -> str:
+    symbol = (symbol or "").strip()
+    if not symbol or ".." in symbol or "\\" in symbol or not _SYMBOL_RE.match(symbol):
+        raise ValueError("invalid symbol")
+    return symbol
+
+
 def resolve_latest_paths(exchange: str, symbol: str) -> dict:
+    exchange = sanitize_exchange(exchange)
+    symbol = sanitize_symbol(symbol)
     symbol_fs = _symbol_fs(symbol)
+    if not symbol_fs or symbol_fs in {".", ".."}:
+        raise ValueError("invalid symbol")
     base = Path("data") / exchange / symbol_fs
     day_dir = _latest_day_dir(base)
     if day_dir is None:

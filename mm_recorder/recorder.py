@@ -956,6 +956,13 @@ def run_recorder():
             except Exception:
                 pass
 
+        for writer in (live_diff_writer, live_trade_writer):
+            if writer is not None:
+                try:
+                    writer.close()
+                except Exception:
+                    pass
+
         log.info("Recorder stopped.")
 
 

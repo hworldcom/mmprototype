@@ -13,7 +13,7 @@ from typing import Any
 
 from mm_api.metrics_store import CloseSeries, compute_correlation, compute_returns, compute_volatility
 from mm_api.protocols import make_message
-from mm_api.sources import resolve_latest_paths
+from mm_api.sources import resolve_latest_paths, sanitize_exchange, sanitize_symbol
 from mm_api.tailer import TailState, tail_text_ndjson
 from mm_history.combiner import combine_from_sources, interval_ms
 from mm_history.writer import write_candles_csv
@@ -95,6 +95,8 @@ async def _metrics_loop(
     window_ms: int,
     metric: str,
 ) -> None:
+    exchange = sanitize_exchange(exchange)
+    symbols = [sanitize_symbol(sym) for sym in symbols]
     if exchange != "binance":
         await _send_metric(ws, exchange, symbols, interval, window_ms, metric, None)
         return
@@ -227,6 +229,9 @@ async def _handler(ws: Any) -> None:
     window_ms = _parse_window_ms(window)
     try:
         await _metrics_loop(ws, exchange, symbols, interval, window_ms, metric)
+    except ValueError as exc:
+        await _send_metric(ws, exchange, symbols, interval, window_ms, "status", None)
+        log.warning("Metrics invalid params: %s", exc)
     except websockets.ConnectionClosed:
         return
 

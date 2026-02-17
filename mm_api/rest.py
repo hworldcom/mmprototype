@@ -24,7 +24,11 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(400, {"error": "symbol_required"})
             return
 
-        paths = resolve_latest_paths(exchange, symbol)
+        try:
+            paths = resolve_latest_paths(exchange, symbol)
+        except ValueError as exc:
+            self._send_json(400, {"error": f"invalid_params: {exc}"})
+            return
         snapshot_path = paths.get("snapshot")
         if not snapshot_path:
             self._send_json(404, {"error": "snapshot_not_found"})
