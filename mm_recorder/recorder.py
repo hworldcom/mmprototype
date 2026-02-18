@@ -6,6 +6,7 @@ import time
 import gzip
 import logging
 from pathlib import Path
+from contextlib import ExitStack
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -149,6 +150,14 @@ def run_recorder():
     log_path = setup_logging("INFO", component="recorder", subdir=log_subdir)
     log = logging.getLogger("market_data.recorder")
     log.info("Recorder logging to %s", log_path)
+
+    def _safe_close(obj, label: str) -> None:
+        if obj is None:
+            return
+        try:
+            obj.close()
+        except Exception:
+            log.exception("Failed to close %s during setup cleanup", label)
 
     tick_info = resolve_price_tick_size(exchange, symbol, log=log)
     set_default_tick_size(tick_info.tick_size)
@@ -294,6 +303,8 @@ def run_recorder():
         }
     write_schema(schema_path, files_schema)
 
+    setup_stack = ExitStack()
+
     ob_writer = BufferedCSVWriter(
         ob_path,
         header=ob_header,
@@ -306,12 +317,16 @@ def run_recorder():
         flush_rows=TRADES_BUFFER_ROWS,
         flush_interval_s=BUFFER_FLUSH_INTERVAL_SEC,
     )
+    setup_stack.callback(_safe_close, ob_writer, "orderbook_writer")
+    setup_stack.callback(_safe_close, tr_writer, "trades_writer")
 
     ob_writer.ensure_file()
     tr_writer.ensure_file()
 
     gap_f, gap_new = open_csv_append(gap_path)
     ev_f, ev_new = open_csv_append(ev_path)
+    setup_stack.callback(_safe_close, gap_f, f"file {getattr(gap_f, 'name', 'unknown')}")
+    setup_stack.callback(_safe_close, ev_f, f"file {getattr(ev_f, 'name', 'unknown')}")
 
     gap_w = csv.writer(gap_f)
     ev_w = csv.writer(ev_f)
@@ -333,12 +348,14 @@ def run_recorder():
             flush_interval_s=BUFFER_FLUSH_INTERVAL_SEC,
             opener=lambda p: gzip.open(p, "at", encoding="utf-8"),
         )
+        setup_stack.callback(_safe_close, diff_writer, "diff_writer")
     tr_raw_writer = BufferedTextWriter(
         trades_dir / f"trades_ws_raw_{symbol_fs}_{day_str}.ndjson.gz",
         flush_lines=5000,
         flush_interval_s=BUFFER_FLUSH_INTERVAL_SEC,
         opener=lambda p: gzip.open(p, "at", encoding="utf-8"),
     )
+    setup_stack.callback(_safe_close, tr_raw_writer, "trades_raw_writer")
     live_diff_writer: LiveNdjsonWriter | None = None
     live_trade_writer: LiveNdjsonWriter | None = None
     if LIVE_STREAM_ENABLED:
@@ -353,6 +370,8 @@ def run_recorder():
             rotate_interval_s=LIVE_STREAM_ROTATE_S,
             retention_s=LIVE_STREAM_RETENTION_S,
         )
+        setup_stack.callback(_safe_close, live_diff_writer, "live_writer")
+        setup_stack.callback(_safe_close, live_trade_writer, "live_writer")
 
     log.info("Day dir:         %s", day_dir)
     log.info("Orderbook out:   %s", ob_path)
@@ -459,35 +478,41 @@ def run_recorder():
         live_trade_writer=live_trade_writer,
     )
 
-    callbacks = RecorderCallbacks(ctx, window_now)
-
-    # Backwards-compatible construction: tests may monkeypatch BinanceWSStream with a
-    # simplified fake that does not accept newer parameters.
     try:
-        stream = BinanceWSStream(
-            ws_url=ws_url,
-            on_depth=callbacks.on_depth,
-            on_trade=callbacks.on_trade,
-            on_open=callbacks.on_open,
-            on_status=callbacks.on_status,
-            on_message=(callbacks.on_message if adapter.uses_custom_ws_messages else None),
-            insecure_tls=INSECURE_TLS,
-            ping_interval_s=WS_PING_INTERVAL_S,
-            ping_timeout_s=WS_PING_TIMEOUT_S,
-            reconnect_backoff_s=WS_RECONNECT_BACKOFF_S,
-            reconnect_backoff_max_s=WS_RECONNECT_BACKOFF_MAX_S,
-            max_session_s=WS_MAX_SESSION_S,
-            open_timeout_s=WS_OPEN_TIMEOUT_S,
-            subscribe_messages=adapter.subscribe_messages(symbol, sub_depth),
-        )
-    except TypeError:
-        stream = BinanceWSStream(
-            ws_url=ws_url,
-            on_depth=callbacks.on_depth,
-            on_trade=callbacks.on_trade,
-            on_open=callbacks.on_open,
-            insecure_tls=INSECURE_TLS,
-        )
+        callbacks = RecorderCallbacks(ctx, window_now)
+
+        # Backwards-compatible construction: tests may monkeypatch BinanceWSStream with a
+        # simplified fake that does not accept newer parameters.
+        try:
+            stream = BinanceWSStream(
+                ws_url=ws_url,
+                on_depth=callbacks.on_depth,
+                on_trade=callbacks.on_trade,
+                on_open=callbacks.on_open,
+                on_status=callbacks.on_status,
+                on_message=(callbacks.on_message if adapter.uses_custom_ws_messages else None),
+                insecure_tls=INSECURE_TLS,
+                ping_interval_s=WS_PING_INTERVAL_S,
+                ping_timeout_s=WS_PING_TIMEOUT_S,
+                reconnect_backoff_s=WS_RECONNECT_BACKOFF_S,
+                reconnect_backoff_max_s=WS_RECONNECT_BACKOFF_MAX_S,
+                max_session_s=WS_MAX_SESSION_S,
+                open_timeout_s=WS_OPEN_TIMEOUT_S,
+                subscribe_messages=adapter.subscribe_messages(symbol, sub_depth),
+            )
+        except TypeError:
+            stream = BinanceWSStream(
+                ws_url=ws_url,
+                on_depth=callbacks.on_depth,
+                on_trade=callbacks.on_trade,
+                on_open=callbacks.on_open,
+                insecure_tls=INSECURE_TLS,
+            )
+    except Exception:
+        setup_stack.close()
+        raise
+
+    setup_stack.pop_all()
 
     callbacks.attach_stream(stream)
 

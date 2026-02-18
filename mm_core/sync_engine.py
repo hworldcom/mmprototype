@@ -37,6 +37,8 @@ class OrderBookSyncEngine:
 
     def adopt_snapshot(self, lob: LocalOrderBook) -> None:
         """Adopt a fully-loaded snapshot book. Resets sync state but keeps buffered events."""
+        if getattr(lob, "last_update_id", None) is None:
+            raise ValueError("Snapshot missing last_update_id; cannot sync.")
         self.lob = lob
         self.tick_size = getattr(lob, "tick_size", self.tick_size)
         self.snapshot_loaded = True

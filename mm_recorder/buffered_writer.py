@@ -47,18 +47,31 @@ class BufferedCSVWriter:
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
         existed = self.path.exists()
-        if self.opener is not None:
-            self._file = self.opener(self.path)
-        elif self.path.suffix == '.gz':
-            self._file = gzip.open(self.path, 'at', encoding='utf-8', newline='')
-        else:
-            self._file = self.path.open('a', newline='')
-        self._writer = csv.writer(self._file)
+        f = None
+        writer = None
+        try:
+            if self.opener is not None:
+                f = self.opener(self.path)
+            elif self.path.suffix == '.gz':
+                f = gzip.open(self.path, 'at', encoding='utf-8', newline='')
+            else:
+                f = self.path.open('a', newline='')
+            writer = csv.writer(f)
 
-        is_empty = (not existed) or _is_empty_text_file(self.path)
-        if self.header and is_empty:
-            self._writer.writerow(self.header)
-            self._file.flush()
+            is_empty = (not existed) or _is_empty_text_file(self.path)
+            if self.header and is_empty:
+                writer.writerow(self.header)
+                f.flush()
+        except Exception:
+            if f is not None:
+                try:
+                    f.close()
+                except Exception:
+                    pass
+            raise
+        else:
+            self._file = f
+            self._writer = writer
 
     def write_row(self, row: Sequence[str | int | float]) -> None:
         self._ensure_open()

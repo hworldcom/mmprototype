@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from itertools import islice
 from typing import Iterable, List, Optional, Tuple
 
@@ -51,9 +51,12 @@ class LocalOrderBook:
     def _price_to_tick(self, price) -> int:
         p = _to_decimal(price)
         ticks = p / self.tick_size
-        ticks_int = ticks.to_integral_value()
+        ticks_int = ticks.to_integral_value(rounding=ROUND_HALF_UP)
         if ticks != ticks_int:
-            raise ValueError(f"price {price!r} does not align to tick_size {self.tick_size}")
+            diff = abs(p - (ticks_int * self.tick_size))
+            epsilon = self.tick_size * Decimal("0.000001")
+            if diff > epsilon:
+                raise ValueError(f"price {price!r} does not align to tick_size {self.tick_size}")
         return int(ticks_int)
 
     def _tick_to_price(self, tick: int) -> Decimal:
