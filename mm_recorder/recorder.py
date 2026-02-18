@@ -149,11 +149,18 @@ def run_recorder():
     log_path = setup_logging("INFO", component="recorder", subdir=log_subdir)
     log = logging.getLogger("market_data.recorder")
     log.info("Recorder logging to %s", log_path)
+
+    tick_info = resolve_price_tick_size(exchange, symbol, log=log)
+    set_default_tick_size(tick_info.tick_size)
+    log.info("Price tick size=%s (source=%s)", tick_info.tick_size, tick_info.source)
+
     log.info(
-        "Recorder config exchange=%s symbol=%s symbol_fs=%s window=%s–%s tz=%s depth_levels=%s store_depth_diffs=%s",
+        "Recorder config exchange=%s symbol=%s symbol_fs=%s tick_size=%s tick_source=%s window=%s–%s tz=%s depth_levels=%s store_depth_diffs=%s",
         exchange,
         symbol,
         symbol_fs,
+        tick_info.tick_size,
+        tick_info.source,
         window_start.isoformat(),
         window_end.isoformat(),
         os.getenv("WINDOW_TZ", "Europe/Berlin"),
@@ -169,10 +176,6 @@ def run_recorder():
         WS_MAX_SESSION_S,
     )
     log.info("WS connect timeout open_timeout_s=%.1f", WS_OPEN_TIMEOUT_S)
-
-    tick_info = resolve_price_tick_size(exchange, symbol, log=log)
-    set_default_tick_size(tick_info.tick_size)
-    log.info("Price tick size=%s (source=%s)", tick_info.tick_size, tick_info.source)
 
     # Recording window in configured timezone.
     start = window_start
