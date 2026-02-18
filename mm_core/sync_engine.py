@@ -27,6 +27,7 @@ class OrderBookSyncEngine:
 
     def __init__(self, lob: Optional[LocalOrderBook] = None, max_buffer_size: int = 200_000):
         self.lob = lob or LocalOrderBook()
+        self.tick_size = self.lob.tick_size
         self.snapshot_loaded: bool = False
         self.depth_synced: bool = False
         self.buffer: List[dict] = []
@@ -37,12 +38,13 @@ class OrderBookSyncEngine:
     def adopt_snapshot(self, lob: LocalOrderBook) -> None:
         """Adopt a fully-loaded snapshot book. Resets sync state but keeps buffered events."""
         self.lob = lob
+        self.tick_size = getattr(lob, "tick_size", self.tick_size)
         self.snapshot_loaded = True
         self.depth_synced = False
 
     def reset_for_resync(self) -> None:
         """Clear state for a fresh snapshot after a gap."""
-        self.lob = LocalOrderBook()
+        self.lob = LocalOrderBook(tick_size=self.tick_size)
         self.snapshot_loaded = False
         self.depth_synced = False
         self.buffer.clear()

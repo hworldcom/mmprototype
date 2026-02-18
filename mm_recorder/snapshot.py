@@ -155,12 +155,13 @@ def record_rest_snapshot(
     lob.load_snapshot(bids=bids, asks=asks, last_update_id=last_update_id)
 
     path = snapshots_dir / f"snapshot_{event_id:06d}_{tag}.csv"
+    bids_levels, asks_levels = lob.levels()
     write_snapshot_csv(
         path=path,
         run_id=run_id,
         event_id=event_id,
-        bids=[[str(p), str(q)] for p, q in lob.bids.items()],
-        asks=[[str(p), str(q)] for p, q in lob.asks.items()],
+        bids=[[str(p), str(q)] for p, q in bids_levels],
+        asks=[[str(p), str(q)] for p, q in asks_levels],
         last_update_id=last_update_id,
         decimals=decimals,
     )

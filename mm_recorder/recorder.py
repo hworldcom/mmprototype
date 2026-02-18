@@ -17,12 +17,30 @@ Note: The project supports running unit tests in minimal environments where
 
 from mm_recorder.logging_config import setup_logging
 from mm_recorder.ws_stream import BinanceWSStream
-from mm_recorder.snapshot import make_rest_client, record_rest_snapshot
+from mm_recorder.snapshot import (
+    make_rest_client,
+    record_rest_snapshot,
+    SNAPSHOT_TIMEOUT_S,
+    SNAPSHOT_RETRY_MAX,
+    SNAPSHOT_RETRY_BACKOFF_S,
+    SNAPSHOT_RETRY_BACKOFF_MAX_S,
+)
 from mm_recorder.buffered_writer import BufferedCSVWriter, BufferedTextWriter, _is_empty_text_file
 from mm_recorder.live_writer import LiveNdjsonWriter
 from mm_recorder.exchanges import get_adapter
+from mm_recorder.metadata import (
+    resolve_price_tick_size,
+    BINANCE_REST_BASE_URL,
+    KRAKEN_REST_BASE_URL,
+    BITFINEX_REST_BASE_URL,
+    METADATA_TIMEOUT_S,
+    METADATA_RETRY_MAX,
+    METADATA_RETRY_BACKOFF_S,
+    METADATA_RETRY_BACKOFF_MAX_S,
+)
 from mm_core.schema import write_schema, SCHEMA_VERSION
 from mm_core.symbols import symbol_fs as symbol_fs_fn
+from mm_core.local_orderbook import set_default_tick_size
 from mm_recorder.recorder_callbacks import RecorderCallbacks
 from mm_recorder.recorder_context import RecorderContext
 from mm_recorder.recorder_settings import (
@@ -151,6 +169,10 @@ def run_recorder():
         WS_MAX_SESSION_S,
     )
     log.info("WS connect timeout open_timeout_s=%.1f", WS_OPEN_TIMEOUT_S)
+
+    tick_info = resolve_price_tick_size(exchange, symbol, log=log)
+    set_default_tick_size(tick_info.tick_size)
+    log.info("Price tick size=%s (source=%s)", tick_info.tick_size, tick_info.source)
 
     # Recording window in configured timezone.
     start = window_start
@@ -340,7 +362,62 @@ def run_recorder():
         log.info("Live diffs out:  %s", live_dir / "live_depth_diffs.ndjson")
         log.info("Live trades out: %s", live_dir / "live_trades.ndjson")
 
+    ws_url = adapter.ws_url(symbol)
+
     engine = adapter.create_sync_engine(sub_depth)
+    engine_buffer_max = getattr(engine, "max_buffer_size", None)
+
+    log.info(
+        "Startup summary exchange=%s symbol=%s symbol_fs=%s ws_url=%s run_id=%s",
+        exchange,
+        symbol,
+        symbol_fs,
+        ws_url,
+        run_id,
+    )
+    log.info(
+        "Startup window start=%s end=%s tz=%s day_dir=%s",
+        window_start.isoformat(),
+        window_end.isoformat(),
+        os.getenv("WINDOW_TZ", "Europe/Berlin"),
+        day_dir,
+    )
+    log.info(
+        "Startup metadata tick_size=%s source=%s metadata_fetch=%s metadata_strict=%s price_tick_override=%s",
+        tick_info.tick_size,
+        tick_info.source,
+        os.getenv("MM_METADATA_FETCH", "1"),
+        os.getenv("MM_METADATA_STRICT", "1"),
+        ("set" if os.getenv("MM_PRICE_TICK_SIZE") else "unset"),
+    )
+    log.info(
+        "Startup metadata endpoints binance=%s kraken=%s bitfinex=%s timeout_s=%.1f retries=%s backoff_s=%.2f backoff_max_s=%.2f",
+        BINANCE_REST_BASE_URL,
+        KRAKEN_REST_BASE_URL,
+        BITFINEX_REST_BASE_URL,
+        METADATA_TIMEOUT_S,
+        METADATA_RETRY_MAX,
+        METADATA_RETRY_BACKOFF_S,
+        METADATA_RETRY_BACKOFF_MAX_S,
+    )
+    log.info(
+        "Startup snapshot config limit=%s timeout_s=%.1f retries=%s backoff_s=%.2f backoff_max_s=%.2f",
+        SNAPSHOT_LIMIT,
+        SNAPSHOT_TIMEOUT_S,
+        SNAPSHOT_RETRY_MAX,
+        SNAPSHOT_RETRY_BACKOFF_S,
+        SNAPSHOT_RETRY_BACKOFF_MAX_S,
+    )
+    log.info(
+        "Startup buffers depth_levels=%s store_depth_diffs=%s live_stream=%s ob_flush_rows=%s tr_flush_rows=%s flush_interval_s=%.1f max_sync_buffer=%s",
+        DEPTH_LEVELS,
+        STORE_DEPTH_DIFFS,
+        LIVE_STREAM_ENABLED,
+        ORDERBOOK_BUFFER_ROWS,
+        TRADES_BUFFER_ROWS,
+        BUFFER_FLUSH_INTERVAL_SEC,
+        engine_buffer_max,
+    )
 
     state = RecorderState(
         event_id=int(time.time() * 1000),
@@ -348,8 +425,6 @@ def run_recorder():
         sync_t0=time.time(),
         last_sync_warn=time.time(),
     )
-
-    ws_url = adapter.ws_url(symbol)
 
     ctx = RecorderContext(
         adapter=adapter,

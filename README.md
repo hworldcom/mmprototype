@@ -202,10 +202,19 @@ If you vendor this repo into another build context, ensure `mm_core` is present 
 | `LIVE_STREAM_ROTATE_S` | Rotate live files after this many seconds (default: `60`). |
 | `LIVE_STREAM_RETENTION_S` | Retain rotated live files for this many seconds (default: `3600`). |
 | `BINANCE_REST_BASE_URL` | Base URL for Binance REST snapshots (default: `https://api.binance.com`). |
+| `KRAKEN_REST_BASE_URL` | Base URL for Kraken REST metadata (default: `https://api.kraken.com`). |
+| `BITFINEX_REST_BASE_URL` | Base URL for Bitfinex REST metadata (default: `https://api.bitfinex.com`). |
 | `SNAPSHOT_TIMEOUT_S` | REST snapshot timeout in seconds (default: `10`). |
 | `SNAPSHOT_RETRY_MAX` | Max snapshot retries (default: `3`). |
 | `SNAPSHOT_RETRY_BACKOFF_S` | Initial snapshot retry backoff in seconds (default: `0.5`). |
 | `SNAPSHOT_RETRY_BACKOFF_MAX_S` | Max snapshot retry backoff in seconds (default: `5`). |
+| `MM_METADATA_FETCH` | Fetch exchange metadata at startup for price tick sizes (default: `1`). If `0`, you must set `MM_PRICE_TICK_SIZE`. |
+| `MM_METADATA_STRICT` | Fail if metadata fetch fails (default: `1`). |
+| `MM_PRICE_TICK_SIZE` | Override price tick size (skip REST metadata) when set. |
+| `METADATA_TIMEOUT_S` | Metadata REST timeout in seconds (default: `10`). |
+| `METADATA_RETRY_MAX` | Max metadata fetch retries (default: `3`). |
+| `METADATA_RETRY_BACKOFF_S` | Initial metadata retry backoff in seconds (default: `0.5`). |
+| `METADATA_RETRY_BACKOFF_MAX_S` | Max metadata retry backoff in seconds (default: `5`). |
 | `WINDOW_TZ` (env) | Timezone used for start/end windows (default: `Europe/Berlin`). |
 | `WINDOW_START_HHMM` (env) | Window start time in 24h `HH:MM` (default: `00:00`). |
 | `WINDOW_END_HHMM` (env) | Window end time in 24h `HH:MM` (default: `00:15`). |

@@ -94,6 +94,7 @@ class KrakenSyncEngine:
         self.depth = int(depth)
         self.book = KrakenBook(self.depth)
         self.lob = LocalOrderBook()
+        self.tick_size = self.lob.tick_size
         self.depth_synced = False
         self.snapshot_loaded = False
         self.buffer = []
@@ -103,10 +104,7 @@ class KrakenSyncEngine:
     def adopt_snapshot(self, snapshot: BookSnapshot) -> None:
         self.book.load_snapshot(snapshot.bids, snapshot.asks)
         bids, asks = self.book.top_n(self.depth)
-        self.lob.bids.clear()
-        self.lob.asks.clear()
-        self.lob.bids.update({p: q for p, q in bids})
-        self.lob.asks.update({p: q for p, q in asks})
+        self.lob.replace_levels(bids, asks)
         self.snapshot_loaded = True
         self.depth_synced = True
         if self.buffer:
@@ -116,7 +114,7 @@ class KrakenSyncEngine:
 
     def reset_for_resync(self) -> None:
         self.book = KrakenBook(self.depth)
-        self.lob = LocalOrderBook()
+        self.lob = LocalOrderBook(tick_size=self.tick_size)
         self.snapshot_loaded = False
         self.depth_synced = False
         self.buffer.clear()
@@ -131,10 +129,7 @@ class KrakenSyncEngine:
 
         self.book.apply_update(ev.bids, ev.asks)
         bids, asks = self.book.top_n(self.depth)
-        self.lob.bids.clear()
-        self.lob.asks.clear()
-        self.lob.bids.update({p: q for p, q in bids})
-        self.lob.asks.update({p: q for p, q in asks})
+        self.lob.replace_levels(bids, asks)
 
         if ev.checksum is not None:
             calc = self.book.checksum(10)
