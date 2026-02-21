@@ -148,7 +148,7 @@ def _fetch_bitfinex_tick_size(symbol: str) -> tuple[Decimal, Any]:
     if precision is None:
         raise RuntimeError(f"Bitfinex symbols_details missing price_precision for {pair_key}")
     tick = Decimal(1) / (Decimal(10) ** int(precision))
-    return tick, data
+    return tick, {"price_precision": int(precision), "raw": data}
 
 
 def resolve_price_tick_size(exchange: str, symbol: str, log=None) -> PriceTickInfo:
@@ -172,7 +172,21 @@ def resolve_price_tick_size(exchange: str, symbol: str, log=None) -> PriceTickIn
 
     try:
         tick, raw = _call_with_retry(_fetch)
-        return PriceTickInfo(exchange=exchange, symbol=symbol, tick_size=_to_decimal(tick), source="metadata", raw=raw)
+        info = PriceTickInfo(exchange=exchange, symbol=symbol, tick_size=_to_decimal(tick), source="metadata", raw=raw)
+        if log is not None and (exchange or "").strip().lower() == "bitfinex":
+            precision = None
+            if isinstance(raw, dict):
+                precision = raw.get("price_precision")
+            if precision is not None:
+                log.warning(
+                    "Bitfinex does not publish a fixed tick size; derived from price_precision=%s (significant digits).",
+                    precision,
+                )
+            else:
+                log.warning(
+                    "Bitfinex does not publish a fixed tick size; derived from price_precision (significant digits)."
+                )
+        return info
     except Exception as exc:
         if _env_bool("MM_METADATA_STRICT", True):
             raise

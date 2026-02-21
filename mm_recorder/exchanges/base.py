@@ -25,7 +25,7 @@ class ExchangeAdapter(ABC):
     def normalize_depth(self, depth: int) -> int:
         return int(depth)
 
-    def create_sync_engine(self, depth: int):
+    def create_sync_engine(self, depth: int, **_kwargs):
         return OrderBookSyncEngine()
 
     @property

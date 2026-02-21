@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import binascii
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Dict, List, Optional, Tuple
 
 from mm_core.local_orderbook import LocalOrderBook
@@ -15,11 +15,22 @@ def _signed_crc(val: int) -> int:
 
 
 class BitfinexBook:
-    def __init__(self, depth: int) -> None:
+    def __init__(self, depth: int, price_precision: int | None = None) -> None:
         # price -> (price_str, count_str, amount_str)
         self.bids: Dict[Decimal, tuple[str, str, str]] = {}
         self.asks: Dict[Decimal, tuple[str, str, str]] = {}
         self.depth = int(depth)
+        self.price_precision = int(price_precision) if price_precision is not None else None
+
+    def _normalize_price(self, price: str | Decimal) -> Decimal:
+        px = Decimal(str(price))
+        if self.price_precision is None:
+            return px
+        if px == 0:
+            return px
+        adj = px.copy_abs().adjusted()
+        step = Decimal(1).scaleb(adj - (self.price_precision - 1))
+        return (px / step).to_integral_value(rounding=ROUND_HALF_UP) * step
 
     def _trim(self) -> None:
         if self.depth <= 0:
@@ -44,7 +55,8 @@ class BitfinexBook:
                 count_str = "1"
             if amount_str.startswith("-"):
                 amount_str = amount_str[1:]
-            self.bids[Decimal(price_str)] = (price_str, count_str, amount_str)
+            price_norm = self._normalize_price(price_str)
+            self.bids[price_norm] = (str(price_norm), count_str, amount_str)
         for row in asks:
             if not row:
                 continue
@@ -55,11 +67,12 @@ class BitfinexBook:
                 count_str = "1"
             if amount_str.startswith("-"):
                 amount_str = amount_str[1:]
-            self.asks[Decimal(price_str)] = (price_str, count_str, amount_str)
+            price_norm = self._normalize_price(price_str)
+            self.asks[price_norm] = (str(price_norm), count_str, amount_str)
         self._trim()
 
     def apply_update(self, price: str, count: int, amount: str) -> None:
-        px = Decimal(price)
+        px = self._normalize_price(price)
         amt = Decimal(amount)
         if count == 0:
             if amt < 0:
@@ -71,12 +84,12 @@ class BitfinexBook:
             amt_str = str(amount)
             if amt_str.startswith("-"):
                 amt_str = amt_str[1:]
-            self.asks[px] = (price, str(count), amt_str)
+            self.asks[px] = (str(px), str(count), amt_str)
         else:
             amt_str = str(amount)
             if amt_str.startswith("-"):
                 amt_str = amt_str[1:]
-            self.bids[px] = (price, str(count), amt_str)
+            self.bids[px] = (str(px), str(count), amt_str)
         self._trim()
 
     def top_n(self, n: int) -> Tuple[List[Tuple[float, float]], List[Tuple[float, float]]]:
@@ -137,9 +150,10 @@ class BitfinexSyncEngine:
     buffer: List[DepthDiff] = None
     last_checksum_payload: Optional[str] = None
 
-    def __init__(self, depth: int, max_buffer_size: int = 200_000) -> None:
+    def __init__(self, depth: int, max_buffer_size: int = 200_000, price_precision: int | None = None) -> None:
         self.depth = int(depth)
-        self.book = BitfinexBook(self.depth)
+        self.price_precision = int(price_precision) if price_precision is not None else None
+        self.book = BitfinexBook(self.depth, price_precision=self.price_precision)
         self.lob = LocalOrderBook()
         self.tick_size = self.lob.tick_size
         self.depth_synced = False
@@ -161,7 +175,7 @@ class BitfinexSyncEngine:
             self.buffer.clear()
 
     def reset_for_resync(self) -> None:
-        self.book = BitfinexBook(self.depth)
+        self.book = BitfinexBook(self.depth, price_precision=self.price_precision)
         self.lob = LocalOrderBook(tick_size=self.tick_size)
         self.snapshot_loaded = False
         self.depth_synced = False
@@ -185,12 +199,6 @@ class BitfinexSyncEngine:
             calc = self.book.checksum(25)
             expected = int(ev.checksum) if ev.checksum is not None else int(raw.get("checksum", 0))
             if int(calc) != int(expected):
-                alt_asks = self.book.checksum(25, abs_asks=True)
-                if int(alt_asks) == int(expected):
-                    return SyncResult("applied", "checksum_ok_abs_asks")
-                alt_all = self.book.checksum(25, abs_all=True)
-                if int(alt_all) == int(expected):
-                    return SyncResult("applied", "checksum_ok_abs_all")
                 alt_non = self.book.checksum(25, interleave=False)
                 if int(alt_non) == int(expected):
                     return SyncResult("applied", "checksum_ok_non_interleaved")

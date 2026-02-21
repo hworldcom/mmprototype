@@ -161,14 +161,24 @@ def run_recorder():
 
     tick_info = resolve_price_tick_size(exchange, symbol, log=log)
     set_default_tick_size(tick_info.tick_size)
-    log.info("Price tick size=%s (source=%s)", tick_info.tick_size, tick_info.source)
+    price_precision = None
+    if exchange == "bitfinex" and isinstance(tick_info.raw, dict):
+        price_precision = tick_info.raw.get("price_precision")
+    if exchange == "bitfinex" and price_precision is not None:
+        log.info(
+            "Bitfinex price precision=%s (significant digits); tick policy=dynamic (source=%s)",
+            price_precision,
+            tick_info.source,
+        )
+    else:
+        log.info("Price tick size=%s (source=%s)", tick_info.tick_size, tick_info.source)
 
     log.info(
         "Recorder config exchange=%s symbol=%s symbol_fs=%s tick_size=%s tick_source=%s window=%s–%s tz=%s depth_levels=%s store_depth_diffs=%s",
         exchange,
         symbol,
         symbol_fs,
-        tick_info.tick_size,
+        (tick_info.tick_size if exchange != "bitfinex" else "dynamic"),
         tick_info.source,
         window_start.isoformat(),
         window_end.isoformat(),
@@ -386,7 +396,14 @@ def run_recorder():
 
     ws_url = adapter.ws_url(symbol)
 
-    engine = adapter.create_sync_engine(sub_depth)
+    engine_kwargs: dict = {}
+    if exchange == "bitfinex":
+        if isinstance(tick_info.raw, dict) and tick_info.raw.get("price_precision") is not None:
+            try:
+                engine_kwargs["price_precision"] = int(tick_info.raw.get("price_precision"))
+            except Exception:
+                log.warning("Invalid Bitfinex price_precision in metadata: %r", tick_info.raw.get("price_precision"))
+    engine = adapter.create_sync_engine(sub_depth, **engine_kwargs)
     engine_buffer_max = getattr(engine, "max_buffer_size", None)
 
     log.info(

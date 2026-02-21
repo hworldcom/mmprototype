@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from datetime import datetime, timezone
 import logging
+from urllib.parse import parse_qsl
 from typing import Dict, List, Optional
 
 import websockets
@@ -33,8 +34,8 @@ def _parse_query(path: str) -> Dict[str, str]:
     if "?" not in path:
         return {}
     _, query = path.split("?", 1)
-    items = [kv.split("=", 1) for kv in query.split("&") if kv]
-    return {k: v for k, v in items if len(k) > 0}
+    items = parse_qsl(query, keep_blank_values=True)
+    return {k: v for k, v in items if k}
 
 
 def _parse_window_ms(value: str) -> int:

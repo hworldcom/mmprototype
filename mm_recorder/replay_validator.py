@@ -4,6 +4,7 @@ import argparse
 import csv
 import gzip
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, List, Optional
@@ -12,6 +13,8 @@ from mm_core.local_orderbook import LocalOrderBook
 from mm_core.sync_engine import OrderBookSyncEngine, SyncResult
 from mm_core.checksum.kraken import KrakenSyncEngine
 from mm_recorder.exchanges.types import BookSnapshot, DepthDiff
+
+log = logging.getLogger("mm_recorder.replay_validator")
 
 
 @dataclass
@@ -141,7 +144,7 @@ def _validate_segment_binance(seg: Segment, diff_path: Path) -> tuple[int, int]:
                 try:
                     last_update_id = int(row[idx_last])
                 except Exception:
-                    last_update_id = last_update_id
+                    log.warning("Invalid lastUpdateId %r in %s", row[idx_last], seg.snapshot_path)
                 break
     lob.load_snapshot(bids=bids, asks=asks, last_update_id=last_update_id)
     engine = OrderBookSyncEngine(lob)

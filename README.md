@@ -215,6 +215,8 @@ If you vendor this repo into another build context, ensure `mm_core` is present 
 | `METADATA_RETRY_MAX` | Max metadata fetch retries (default: `3`). |
 | `METADATA_RETRY_BACKOFF_S` | Initial metadata retry backoff in seconds (default: `0.5`). |
 | `METADATA_RETRY_BACKOFF_MAX_S` | Max metadata retry backoff in seconds (default: `5`). |
+
+Note: Bitfinex does not publish a fixed tick size; the recorder derives a proxy from `price_precision` (significant digits) and normalizes book prices to those significant digits when available.
 | `WINDOW_TZ` (env) | Timezone used for start/end windows (default: `Europe/Berlin`). |
 | `WINDOW_START_HHMM` (env) | Window start time in 24h `HH:MM` (default: `00:00`). |
 | `WINDOW_END_HHMM` (env) | Window end time in 24h `HH:MM` (default: `00:15`). |

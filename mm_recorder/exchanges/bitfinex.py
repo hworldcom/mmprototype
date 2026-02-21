@@ -55,8 +55,8 @@ class BitfinexAdapter(ExchangeAdapter):
     def uses_custom_ws_messages(self) -> bool:
         return True
 
-    def create_sync_engine(self, depth: int):
-        return BitfinexSyncEngine(depth=25)
+    def create_sync_engine(self, depth: int, price_precision: int | None = None, **_kwargs):
+        return BitfinexSyncEngine(depth=25, price_precision=price_precision)
 
     def parse_ws_message(self, data: dict | list):
         snapshots: List[BookSnapshot] = []

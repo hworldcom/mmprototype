@@ -34,6 +34,7 @@ class KrakenBook:
             self.asks = {p: q for p, q in asks_sorted}
 
     def load_snapshot(self, bids: List[List[str]], asks: List[List[str]]) -> None:
+        """Load snapshot levels. Expects [price, qty] rows; extra fields are ignored."""
         self.bids.clear()
         self.asks.clear()
         for p, q in bids:
@@ -45,6 +46,7 @@ class KrakenBook:
         self._trim()
 
     def apply_update(self, bids: List[List[str]], asks: List[List[str]]) -> None:
+        """Apply updates. Expects [price, qty] rows; extra fields are ignored."""
         for p, q in bids:
             price = Decimal(p)
             qty = str(q)

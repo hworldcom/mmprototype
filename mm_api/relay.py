@@ -5,6 +5,7 @@ import json
 import os
 import logging
 import time
+from urllib.parse import parse_qsl
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -131,8 +132,8 @@ def _parse_query(path: str) -> Dict[str, str]:
     if "?" not in path:
         return {}
     _, query = path.split("?", 1)
-    items = [kv.split("=", 1) for kv in query.split("&") if kv]
-    return {k: v for k, v in items if len(k) > 0}
+    items = parse_qsl(query, keep_blank_values=True)
+    return {k: v for k, v in items if k}
 
 
 async def _send_json(ws: Any, payload: Dict[str, Any]) -> None:

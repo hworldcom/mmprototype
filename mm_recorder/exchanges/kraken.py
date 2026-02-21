@@ -16,6 +16,8 @@ def _as_level_list(levels: List[Dict[str, Any]] | List[List[str]]) -> List[List[
             price = str(lv.get("price"))
             qty = str(lv.get("qty"))
         else:
+            if len(lv) < 2:
+                continue
             price = str(lv[0])
             qty = str(lv[1])
         out.append([price, qty])
@@ -54,7 +56,7 @@ class KrakenAdapter(ExchangeAdapter):
     def normalize_depth(self, depth: int) -> int:
         return self._select_depth(int(depth))
 
-    def create_sync_engine(self, depth: int):
+    def create_sync_engine(self, depth: int, **_kwargs):
         return KrakenSyncEngine(depth)
 
     def normalize_symbol(self, symbol: str) -> str:
