@@ -148,11 +148,22 @@ class BufferedTextWriter:
         if self._file is not None:
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        if self.opener is not None:
-            self._file = self.opener(self.path)
+        f = None
+        try:
+            if self.opener is not None:
+                f = self.opener(self.path)
+            else:
+                # Default to plain text append
+                f = self.path.open("a", encoding="utf-8")
+        except Exception:
+            if f is not None:
+                try:
+                    f.close()
+                except Exception:
+                    pass
+            raise
         else:
-            # Default to plain text append
-            self._file = self.path.open("a", encoding="utf-8")
+            self._file = f
 
     def write_line(self, line: str) -> None:
         self._ensure_open()

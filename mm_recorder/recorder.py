@@ -495,6 +495,9 @@ def run_recorder():
         live_trade_writer=live_trade_writer,
     )
 
+    callbacks = None
+    stream = None
+    runtime_stack = None
     try:
         callbacks = RecorderCallbacks(ctx, window_now)
 
@@ -525,24 +528,28 @@ def run_recorder():
                 on_open=callbacks.on_open,
                 insecure_tls=INSECURE_TLS,
             )
-    except Exception:
-        setup_stack.close()
-        raise
 
-    setup_stack.pop_all()
+        runtime_stack = setup_stack.pop_all()
 
-    callbacks.attach_stream(stream)
+        callbacks.attach_stream(stream)
 
-    callbacks.emit_event("run_start", {"symbol": symbol, "symbol_fs": symbol_fs, "day": day_str})
-    log.info("Connecting WS: %s", ws_url)
+        callbacks.emit_event("run_start", {"symbol": symbol, "symbol_fs": symbol_fs, "day": day_str})
+        log.info("Connecting WS: %s", ws_url)
 
-    try:
         run_fn = getattr(stream, "run", None) or getattr(stream, "run_forever", None)
         if run_fn is None:
             raise RuntimeError("BinanceWSStream has no run()/run_forever()")
         run_fn()
     finally:
-        callbacks.shutdown()
+        if callbacks is not None:
+            try:
+                callbacks.shutdown()
+            except Exception:
+                log.exception("Recorder shutdown raised")
+        try:
+            (runtime_stack or setup_stack).close()
+        except Exception:
+            log.exception("Recorder setup cleanup raised")
 
 
 def main():
